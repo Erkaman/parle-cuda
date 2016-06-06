@@ -6,9 +6,13 @@
 #include "helper_cuda.h"
 
 void scan(int *in, int* out, int n);
-void rle(unsigned char *in, int n);
 
-__global__ void scanKernel(unsigned char *g_idata, unsigned char *g_odata, int n) {
+void rle(int *h_in, int n,
+	int* h_symbolsOut,
+	int* h_countsOut);
+
+
+__global__ void scanKernel(int *g_idata, int *g_odata, int n) {
 	extern __shared__ float temp[]; // size is 2*n
 	int tid = threadIdx.x;
 	int i = blockIdx.x * blockDim.x + tid;
@@ -35,7 +39,7 @@ __global__ void scanKernel(unsigned char *g_idata, unsigned char *g_odata, int n
 
 }
 
-__global__ void getBlocksRunCountKernel(unsigned char *g_idata, unsigned char *g_odata, int n) {
+__global__ void getBlocksRunCountKernel(int *g_idata, int *g_odata, int n) {
 
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int tid = threadIdx.x;
@@ -50,35 +54,35 @@ __global__ void getBlocksRunCountKernel(unsigned char *g_idata, unsigned char *g
 }
 
 __global__ void scatterKernel(
-	unsigned char *g_backwardMask, unsigned char* g_scannedBackwardMask, 
-	unsigned char *g_forwardMask, unsigned char* g_scannedForwardMask,
-	unsigned char *g_blocksOffset, unsigned char *g_in, 
-	unsigned char *g_symbolsOut, char *g_countsOut, int n) {
+	int *g_backwardMask, int* g_scannedBackwardMask, 
+	int *g_forwardMask, int* g_scannedForwardMask,
+	int *g_blocksOffset, int *g_in, 
+	int *g_symbolsOut, int *g_countsOut, int n) {
 
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int tid = threadIdx.x;
 
 	if (i < n){
 
-		unsigned char globalOffset = g_blocksOffset[blockIdx.x];
+		int globalOffset = g_blocksOffset[blockIdx.x];
 
 		if (g_backwardMask[i] == 1){
 
-			unsigned char localOffset = g_scannedBackwardMask[i];
+			int localOffset = g_scannedBackwardMask[i];
 			
-			unsigned char symbol = g_in[i];
+			int symbol = g_in[i];
 
 			g_symbolsOut[localOffset + globalOffset] = symbol;
 			g_countsOut[localOffset + globalOffset] += -tid;
 		}
 		if (g_forwardMask[i] == 1){
-			unsigned char localOffset = g_scannedForwardMask[i];
+			int localOffset = g_scannedForwardMask[i];
 			g_countsOut[localOffset + globalOffset] += tid+1;
 		}
 	}
 }
 
-__global__ void maskKernel(unsigned char *g_in, unsigned char* g_backwardMask, unsigned char* g_forwardMask, int n) {
+__global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
 
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int tid = threadIdx.x;
@@ -99,7 +103,7 @@ __global__ void maskKernel(unsigned char *g_in, unsigned char* g_backwardMask, u
 	}
 }
 
-void PrintArray(unsigned char* arr, int n){
+void PrintArray(int* arr, int n){
 	for (int i = 0; i < n; ++i){
 		printf("%d, ", arr[i]);
 		if (i == (n/2-1) ){
@@ -109,15 +113,6 @@ void PrintArray(unsigned char* arr, int n){
 	printf("\n");
 }
 
-void PrintArray(char* arr, int n){
-	for (int i = 0; i < n; ++i){
-		printf("%d, ", arr[i]);
-		if (i == (n / 2 - 1)){
-			printf("| ");
-		}
-	}
-	printf("\n");
-}
 
 int main()
 {
@@ -125,7 +120,7 @@ int main()
 
 	const int n = 16;
 
-	unsigned char* in = new unsigned char[n];
+	int* in = new int[n];
 	
 	// 4, 4, 4, 2, 3, 3, 3, 1, 1, 1, 1, 1, 1, 2, 3, 1 
 
@@ -142,31 +137,15 @@ int main()
 	CUDA_CHECK(cudaSetDevice(0));
 
 
-	rle(in, n);
+	int* symbolsOut = new int[2 * n];
+	int* countsOut = new int[2 * n];
+
+	rle(in, n, symbolsOut, countsOut);
 
 	// input: 
 	printf("Input:            ");
 	PrintArray(in, n);
 	
-
-	/*
-	scan(in, out, arraySize);
-
-
-	for (int i = 0; i < arraySize; ++i){
-		printf("%d, ", in[i]);
-	}
-	printf("\n");
-
-	for (int i = 0; i < arraySize; ++i){
-		printf("%d, ", out[i]);
-	}
-	printf("\n");
-
-	delete[] in;
-	delete[] out;
-	*/
-
 	CUDA_CHECK(cudaDeviceReset());
 
 
@@ -174,22 +153,24 @@ int main()
 	return 0;
 }
 
-void rle(unsigned char *h_in, int n){
+void rle(int *h_in, int n,
+	int* h_symbolsOut,
+	int* h_countsOut){
 
-	unsigned char* d_backwardMask;
-	unsigned char* d_scannedBackwardMask;
-	unsigned char* d_scannedForwardMask;
-	unsigned char* d_forwardMask;
-	unsigned char* d_in;
+	int* d_backwardMask;
+	int* d_scannedBackwardMask;
+	int* d_scannedForwardMask;
+	int* d_forwardMask;
+	int* d_in;
 
 
 	// keeps track of the number of runs per block. So d_blocksRunCount[0] is the number of runs for block number 0. 
-	unsigned char* d_blocksRunCount;
-	unsigned char* d_blocksOffset;
+	int* d_blocksRunCount;
+	int* d_blocksOffset;
 
-	unsigned char* d_symbolsOut;
+	int* d_symbolsOut;
 
-	char* d_countsOut;
+	int* d_countsOut;
 
 
 
@@ -197,32 +178,32 @@ void rle(unsigned char *h_in, int n){
 	const int BLOCK_SIZE = n / BLOCK_COUNT;
 
 	// allocate resources on device. 
-	CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(unsigned char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, n * sizeof(unsigned char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, n * sizeof(unsigned char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, n * sizeof(unsigned char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, n * sizeof(unsigned char)));
+	CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, n * sizeof(int)));
 
-	CUDA_CHECK(cudaMalloc((void**)&d_blocksRunCount, BLOCK_COUNT * sizeof(unsigned char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_blocksOffset, BLOCK_COUNT * sizeof(unsigned char)));
+	CUDA_CHECK(cudaMalloc((void**)&d_blocksRunCount, BLOCK_COUNT * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_blocksOffset, BLOCK_COUNT * sizeof(int)));
 
-	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, 2 * n * sizeof(char)));
-	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, 2 * n * sizeof(unsigned char)));
+	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, 2 * n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, 2 * n * sizeof(int)));
 
 
 	// transer input data to device.
-	CUDA_CHECK(cudaMemcpy(d_in, h_in, n*sizeof(unsigned char), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(d_in, h_in, n*sizeof(int), cudaMemcpyHostToDevice));
 
 	// get forward and backward mask. 
 	maskKernel<<<BLOCK_COUNT, BLOCK_SIZE>>>(d_in, d_backwardMask, d_forwardMask, n);
 
-	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * n * sizeof(unsigned char) >> >(d_backwardMask, d_scannedBackwardMask, n);
-	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * n * sizeof(unsigned char) >> >(d_forwardMask, d_scannedForwardMask, n);
+	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * n * sizeof(int) >> >(d_backwardMask, d_scannedBackwardMask, n);
+	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * n * sizeof(int) >> >(d_forwardMask, d_scannedForwardMask, n);
 
 
 	getBlocksRunCountKernel << <BLOCK_COUNT, BLOCK_SIZE >> >(d_scannedBackwardMask, d_blocksRunCount, n);
 
-	scanKernel << <1, BLOCK_COUNT, 2 * BLOCK_COUNT * sizeof(unsigned char) >> >(d_blocksRunCount, d_blocksOffset, n);
+	scanKernel << <1, BLOCK_COUNT, 2 * BLOCK_COUNT * sizeof(int) >> >(d_blocksRunCount, d_blocksOffset, n);
 
 
 
@@ -235,28 +216,25 @@ void rle(unsigned char *h_in, int n){
 
 
 	
-	unsigned char* h_backwardMask        = new unsigned char[n];
-	unsigned char* h_forwardMask         = new unsigned char[n];
-	unsigned char* h_scannedBackwardMask = new unsigned char[n];
-	unsigned char* h_scannedForwardMask  = new unsigned char[n];
+	int* h_backwardMask        = new int[n];
+	int* h_forwardMask         = new int[n];
+	int* h_scannedBackwardMask = new int[n];
+	int* h_scannedForwardMask  = new int[n];
 
-	unsigned char* h_blocksRunCount      = new unsigned char[BLOCK_COUNT];
-	unsigned char* h_blocksOffset        = new unsigned char[BLOCK_COUNT];
+	int* h_blocksRunCount      = new int[BLOCK_COUNT];
+	int* h_blocksOffset        = new int[BLOCK_COUNT];
 
-	unsigned char* h_symbolsOut = new unsigned char[2*n];
-	char* h_countsOut = new char[2*n];
+	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
 
-	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, n*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, n*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, n*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, n*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-
-	CUDA_CHECK(cudaMemcpy(h_blocksRunCount, d_blocksRunCount, BLOCK_COUNT*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_blocksOffset, d_blocksOffset, BLOCK_COUNT*sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_blocksRunCount, d_blocksRunCount, BLOCK_COUNT*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_blocksOffset, d_blocksOffset, BLOCK_COUNT*sizeof(int), cudaMemcpyDeviceToHost));
 
 	
-	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, 2*n*sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, 2 * n*sizeof(char), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, 2*n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
 	
 
 	printf("Backward:         ");
