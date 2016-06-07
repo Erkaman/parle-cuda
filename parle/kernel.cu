@@ -10,12 +10,42 @@ int parle(int *in, int n,
 	int* h_countsOut, int blockSize);
 
 
+__global__ void scanKernel2(int *g_idata, int *g_odata, int n) {
+	extern __shared__ int temp[]; // size is 2*n
+	int tid = threadIdx.x;
+	int pout = 0;
+	int pin = 1;
+	
+
+	temp[pout*n + tid] = (tid > 0) ? g_idata[tid - 1] : 0;
+	//temp[pout*n + i] = g_idata[i];
+
+	__syncthreads();
+
+	for (int offset = 1; offset < blockDim.x; offset *= 2)
+	{
+		pout = 1 - pout; // swap double buffer indices
+		pin = 1 - pout;
+		if (tid >= offset)
+			temp[pout*n + tid] = temp[pin*n + tid] + temp[pin*n + tid - offset];
+		else
+			temp[pout*n + tid] = temp[pin*n + tid];
+		__syncthreads();
+	}
+
+	g_odata[tid] = temp[pout*n + tid]; // write output
+}
+
+
+// segmented scan that is run on each thread block. 
 __global__ void scanKernel(int *g_idata, int *g_odata, int n) {
-	extern __shared__ float temp[]; // size is 2*n
+	extern __shared__ int temp[]; // size is 2*n
 	int tid = threadIdx.x;
 	int i = blockIdx.x * blockDim.x + tid;
 	int pout = 0;
 	int pin = 1;
+
+
 
 	temp[pout*n + i] = (tid > 0) ? g_idata[i-1] : 0;
 	//temp[pout*n + i] = g_idata[i];
@@ -34,7 +64,6 @@ __global__ void scanKernel(int *g_idata, int *g_odata, int n) {
 	}
 	
 	g_odata[i] = temp[pout*n + i]; // write output
-
 }
 
 __global__ void getBlocksRunCountKernel(int *g_idata, int *g_odata, int n) {
@@ -109,11 +138,11 @@ __global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, i
 	}
 }
 
-void PrintArray(int* arr, int n){
+void PrintArray(int* arr, int n, int j){
 	for (int i = 0; i < n; ++i){
 		printf("%d, ", arr[i]);
-		if (i == (n/2-1) ){
-	//		printf("| ");
+		if ( (i+1) % j == (0) && i!=0 ){
+			printf("| ");
 		}
 	}
 	printf("\n");
@@ -159,12 +188,13 @@ int main()
 {
 	sdkCreateTimer(&timer);
 
-	const int n = 24;
+	const int n = 1<<11; // 61, 31
 
 	int* in = new int[n];
 	
 	// 4, 4, 4, 2, 3, 3, 3, 1, 1, 1, 1, 1, 1, 2, 3, 1 
 
+	/*
 	int i = 0;
 	in[i++] = 4; in[i++] = 4; in[i++] = 4;// 3
 	in[i++] = 2; // 1
@@ -184,7 +214,15 @@ int main()
 
 	in[i++] = 3; // 1
 	in[i++] = 3; // 1
+	*/
 
+	srand(1000);
+
+	in[0] = 0;
+
+	for (int i = 1; i < n; ++i) {
+		in[i] = in[i - 1] + (rand() % 6 == 0);
+	}
 
 	
 	CUDA_CHECK(cudaSetDevice(0));
@@ -193,12 +231,12 @@ int main()
 	int* symbolsOut = new int[2 * n];
 	int* countsOut = new int[2 * n];
 	
-	int totalRuns = parle(in, n, symbolsOut, countsOut, 4);
-	
+	int totalRuns = parle(in, n, symbolsOut, countsOut, /*7*/ 1<<8); // 30, 7
+
 	// input: 
-	printf("Input:            ");
-	PrintArray(in, n);
-	
+	/*printf("Input:            ");
+	PrintArray(in, n, 100000);
+	*/
 	
 	verifyCompression(
 		in, n,
@@ -238,8 +276,12 @@ int parle(int *in, int n,
 	const int BLOCK_COUNT = (int)ceil( n / (double)BLOCK_SIZE );
 	const int N = BLOCK_COUNT * BLOCK_SIZE;
 
+	/*
 	printf("N: %d\n", N);
-
+	printf("n: %d\n", n);
+	printf("blocksize: %d\n", BLOCK_SIZE);
+	printf("BLOCK_COUNT: %d\n", BLOCK_COUNT);
+	*/
 	
 	int padding = 0; // default padding char is 0.
 	if (in[n - 1] == 0){
@@ -257,15 +299,16 @@ int parle(int *in, int n,
 			h_in[i] = padding; 
 		}
 	}
+	/*
 	printf("use pad: %d", usePadding);
 
-	printf("Orig:      ");
-	
-	PrintArray(h_in, N);
+	printf("orig:      ");
+	PrintArray(in, n, BLOCK_SIZE);
 
 
-
-
+	printf("padded:      ");	
+	PrintArray(h_in, N, BLOCK_SIZE);
+	*/
 
 
 	// allocate resources on device. 
@@ -292,21 +335,27 @@ int parle(int *in, int n,
 	maskKernel<<<BLOCK_COUNT, BLOCK_SIZE>>>(d_in, d_backwardMask, d_forwardMask, N);
 	CUDA_CHECK(cudaGetLastError());
 	
+	
 	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * N * sizeof(int) >> >(d_backwardMask, d_scannedBackwardMask, N);
 	CUDA_CHECK(cudaGetLastError());
-
+	
 	scanKernel << <BLOCK_COUNT, BLOCK_SIZE, 2 * N * sizeof(int) >> >(d_forwardMask, d_scannedForwardMask, N);
 	CUDA_CHECK(cudaGetLastError());
 
 	
 	getBlocksRunCountKernel << <BLOCK_COUNT, BLOCK_SIZE >> >(d_scannedBackwardMask, d_blocksRunCount, N);
 	CUDA_CHECK(cudaGetLastError());
-
+	/*
+	printf("block count:%d \n", BLOCK_COUNT);
+	printf("allocate this muc:%d \n", 2 * BLOCK_COUNT * sizeof(int));
+	*/
 	// TODO: there may not be enough thread if there are many blocks!
-	scanKernel << <1, BLOCK_COUNT, 2 * BLOCK_COUNT * sizeof(int) >> >(d_blocksRunCount, d_blocksOffset, N);
+	//scanKernel2 << <1, BLOCK_COUNT, 2 * BLOCK_COUNT * sizeof(int) >> >(d_blocksRunCount, d_blocksOffset, BLOCK_COUNT);
+	scanKernel << <1, BLOCK_COUNT, 2 * BLOCK_COUNT * sizeof(int) >> >(d_blocksRunCount, d_blocksOffset, BLOCK_COUNT);
+
 	CUDA_CHECK(cudaGetLastError());
-
-
+	
+	
 	
 	scatterKernel << <BLOCK_COUNT, BLOCK_SIZE >> >(
 		d_backwardMask, d_scannedBackwardMask, 
@@ -315,7 +364,7 @@ int parle(int *in, int n,
 		d_blocksOffset, d_in, 
 		d_symbolsOut, d_countsOut, N, d_totalRuns);
 	CUDA_CHECK(cudaGetLastError());
-
+	
 	
 	
 	int* h_backwardMask        = new int[N];
@@ -328,6 +377,9 @@ int parle(int *in, int n,
 
 	int h_totalRuns;
 
+	//CUDA_CHECK(cudaDeviceSynchronize());
+
+	
 	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
@@ -350,25 +402,25 @@ int parle(int *in, int n,
 	}
 	
 	
-	
+	/*
 	printf("Backward:         ");
-	PrintArray(h_backwardMask, N);
-
+	PrintArray(h_backwardMask, N, BLOCK_SIZE);
+	
 	printf("Forward:          ");
-	PrintArray(h_forwardMask, N);
+	PrintArray(h_forwardMask, N, BLOCK_SIZE);
 
 	printf("Scanned Backward: ");
-	PrintArray(h_scannedBackwardMask, N);
+	PrintArray(h_scannedBackwardMask, N, BLOCK_SIZE);
 
 	printf("Scanned Forward:  ");
-	PrintArray(h_scannedForwardMask, N);
-
+	PrintArray(h_scannedForwardMask, N, BLOCK_SIZE);
+	
 	printf("h_blocksRunCount: ");
-	PrintArray(h_blocksRunCount, BLOCK_COUNT);
+	PrintArray(h_blocksRunCount, BLOCK_COUNT, BLOCK_SIZE);
 
 	printf("h_blocksOffset:   ");
-	PrintArray(h_blocksOffset, BLOCK_COUNT);
-
+	PrintArray(h_blocksOffset, BLOCK_COUNT, BLOCK_SIZE);
+	
 	printf("h_symbolsOut:     ");
 	PrintArray(h_symbolsOut, h_totalRuns);
 
@@ -378,6 +430,7 @@ int parle(int *in, int n,
 
 
 	printf("h_totalRuns:      %d\n", h_totalRuns);
+	*/
 	
 	return h_totalRuns;
 	// TODO: cudaFree.
