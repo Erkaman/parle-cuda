@@ -148,15 +148,15 @@ void PrintArray(int* arr, int n, int j){
 	printf("\n");
 }
 
-void verifyCompression(
+char errorString[256];
+
+bool verifyCompression(
 	int* original, int n, 
 	int* compressedSymbols, int* compressedCounts, int totalRuns){
 
 	int* decompressed = new int[n];
 
-	printf("Original Size  : %d\n", n);
-	printf("Compressed Size: %d\n", totalRuns*2);
-
+	
 
 	// decompress.
 	int j = 0;
@@ -172,9 +172,13 @@ void verifyCompression(
 	// verify the compression.
 	for (int i = 0; i < n; ++i) {
 		if (original[i] != decompressed[i]){
-			printf("Decompressed and original not equal at %d, %d != %d\n", i, original[i], decompressed[i]);
+
+			sprintf(errorString, "Decompressed and original not equal at %d, %d != %d\n", i, original[i], decompressed[i]);
+			return false;
 		}
 	}
+
+	return true;
 
 	//printf("Decompressed:     ");
 //	PrintArray(decompressed, n);
@@ -184,63 +188,120 @@ void verifyCompression(
 
 }
 
-int main()
-{
-	sdkCreateTimer(&timer);
 
-	const int n = 1<<11; // 61, 31
+int* getRandomData(int n){
 
 	int* in = new int[n];
-	
-	// 4, 4, 4, 2, 3, 3, 3, 1, 1, 1, 1, 1, 1, 2, 3, 1 
 
-	/*
-	int i = 0;
-	in[i++] = 4; in[i++] = 4; in[i++] = 4;// 3
-	in[i++] = 2; // 1
-	in[i++] = 3; in[i++] = 3; in[i++] = 3; // 3
-	in[i++] = 1; in[i++] = 1; in[i++] = 1; 	in[i++] = 9; in[i++] = 1; in[i++] = 1; // 6
-	in[i++] = 2; // 1
-	in[i++] = 3; // 1
-	in[i++] = 1; // 1
+	int val = rand() % 1000;
 
-	in[i++] = 5; // 1
-	in[i++] = 5; // 1
-	in[i++] = 5; // 1
+	for (int i = 0; i < n; ++i) {
+		in[i] = val;
 
-	in[i++] = 5; // 1
-	in[i++] = 5; // 1
-	in[i++] = 3; // 1
-
-	in[i++] = 3; // 1
-	in[i++] = 3; // 1
-	*/
-
-	srand(1000);
-
-	in[0] = 0;
-
-	for (int i = 1; i < n; ++i) {
-		in[i] = in[i - 1] + (rand() % 6 == 0);
+		if (rand() % 6 == 0){
+			val = rand() % 1000;
+		}
 	}
 
-	
-	CUDA_CHECK(cudaSetDevice(0));
+	return in;
+}
 
+
+void unitTest(int* in, int n, int blockSize)
+{
 
 	int* symbolsOut = new int[2 * n];
 	int* countsOut = new int[2 * n];
-	
-	int totalRuns = parle(in, n, symbolsOut, countsOut, /*7*/ 1<<8); // 30, 7
 
-	// input: 
-	/*printf("Input:            ");
-	PrintArray(in, n, 100000);
+	int totalRuns = parle(in, n, symbolsOut, countsOut, 30); // 1<<8
+
+	printf("n = %d, blockSize = %d\n", n, blockSize);
+	printf("Original Size  : %d\n", n);
+	printf("Compressed Size: %d\n", totalRuns * 2);
+
+
+	if (!verifyCompression(
+		in, n,
+		symbolsOut, countsOut, totalRuns)) {
+		printf("Failed test %s\n", errorString);
+		exit(1);
+	}
+	else {
+		printf("passed test!\n\n");
+	}
+
+	delete[] symbolsOut;
+	delete[] countsOut;
+}
+
+
+int main()
+{
+	sdkCreateTimer(&timer);
+	srand(1000);
+	CUDA_CHECK(cudaSetDevice(0));
+	
+	int n = 12;
+	int* in = new int[12];
+
+	int i = 0;
+	in[i++] = 1; 
+	in[i++] = 4;
+	in[i++] = 4;
+	in[i++] = 4;
+	in[i++] = 2;
+	in[i++] = 2;
+
+	in[i++] = 2;
+	in[i++] = 2;
+	in[i++] = 2;
+	in[i++] = 4;
+	in[i++] = 5;
+	in[i++] = 6;
+
+	unitTest(in, n, 6);
+
+
+	delete[]in;
+	
+
+
+	/*
+	for (int i = 4; i < 12; ++i) {
+
+		for (int j = 2; j < (i); ++j) {
+
+			for (int k = 0; k < 3; ++k) {
+
+				int n = 2 << i;
+				int blockSize = 2 << j;
+
+				if (k != 0) {
+					// in first test, do with nice values for 'n' and 'blockSize'
+					// on the other two tests, do with slightly randomized values.
+					n += (-11 + rand() % 30);
+					blockSize += (-3 + rand() % 11);
+
+				}
+				
+				int* in = getRandomData(n);
+
+				unitTest(in, n, blockSize);
+
+				delete[] in;
+			}
+
+
+		}
+		printf("-------------------------------\n\n");
+
+	}
 	*/
 	
-	verifyCompression(
-		in, n,
-		symbolsOut, countsOut, totalRuns);
+	
+	
+
+
 	
 	CUDA_CHECK(cudaDeviceReset());
 	
@@ -299,6 +360,7 @@ int parle(int *in, int n,
 			h_in[i] = padding; 
 		}
 	}
+	
 	/*
 	printf("use pad: %d", usePadding);
 
@@ -422,20 +484,46 @@ int parle(int *in, int n,
 	PrintArray(h_blocksOffset, BLOCK_COUNT, BLOCK_SIZE);
 	
 	printf("h_symbolsOut:     ");
-	PrintArray(h_symbolsOut, h_totalRuns);
+	PrintArray(h_symbolsOut, h_totalRuns,10000000);
 
 	printf("h_countsOut:      ");
-	PrintArray(h_countsOut, h_totalRuns);
+	PrintArray(h_countsOut, h_totalRuns,1000000);
 
 
 
 	printf("h_totalRuns:      %d\n", h_totalRuns);
 	*/
+
+	delete []h_in;
+
+	delete[] h_backwardMask;
+	delete[] h_forwardMask;
+	delete[] h_scannedBackwardMask;
+	delete[] h_scannedForwardMask;
+
+	delete[] h_blocksRunCount;
+	delete[] h_blocksOffset;
+
+
+	CUDA_CHECK(cudaFree(d_in));
+	
+	CUDA_CHECK(cudaFree(d_backwardMask));
+	CUDA_CHECK(cudaFree(d_forwardMask));
+	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
+	CUDA_CHECK(cudaFree(d_scannedForwardMask));
+
+	CUDA_CHECK(cudaFree(d_blocksRunCount));
+	CUDA_CHECK(cudaFree(d_blocksOffset));
+
+	CUDA_CHECK(cudaFree(d_countsOut));
+	CUDA_CHECK(cudaFree(d_symbolsOut));
+
+	CUDA_CHECK(cudaFree(d_totalRuns));
+	
 	
 	return h_totalRuns;
 	// TODO: cudaFree.
 	
-	return 0;
 }
 
 /*
