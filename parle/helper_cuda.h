@@ -14,7 +14,7 @@ void CheckCudaError(cudaError ret, const char* stmt, const char* filename, int l
 		exit(1);
 	}
 }
-
+#define _DEBUG
 
 // GL Check.
 #ifdef _DEBUG
