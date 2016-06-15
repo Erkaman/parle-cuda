@@ -10,41 +10,39 @@
 
 #include "cudpp.h"
 
+#include "hemi/grid_stride_range.h"
+#include "hemi/launch.h"
 
 int parle(int *in, int n,
 	int* h_symbolsOut,
-	int* h_countsOut, int blockSize);
+	int* h_countsOut);
 
 
 
 __global__ void sumKernel(int *g_countsOut, int n, int* plus, int* minus) {
-
-	int i = blockDim.x * blockIdx.x + threadIdx.x;
-
-	if (i < n){
+	for (int i : hemi::grid_stride_range(0, n)) {
 		g_countsOut[i] = plus[i] + minus[i];
 	}
+
 }
 
 __global__ void scatterKernel(
-	int *g_backwardMask, int* g_scannedBackwardMask, 
+	int *g_backwardMask, int* g_scannedBackwardMask,
 	int *g_forwardMask, int* g_scannedForwardMask,
-	int *g_in, 
+	int *g_in,
 	int *g_symbolsOut, int *g_countsOut, int n, int* plus, int* minus) {
 
-	int i = blockDim.x * blockIdx.x + threadIdx.x;
-	
-	if (i < n){
+	for (int i : hemi::grid_stride_range(0, n)) {
 
 		int offset;
 
 		if (g_backwardMask[i] == 1){
 
 			offset = g_scannedBackwardMask[i];
-			
+
 			int symbol = g_in[i];
 
-		 	g_symbolsOut[offset] = symbol;
+			g_symbolsOut[offset] = symbol;
 			//g_countsOut[offset] += -i;
 			minus[offset] = -i;
 			//atomicAdd(&g_countsOut[offset], -i);
@@ -60,22 +58,19 @@ __global__ void scatterKernel(
 }
 
 __global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
+	for (int i : hemi::grid_stride_range(0, n)) {
 
-	int i = blockDim.x * blockIdx.x + threadIdx.x;
-	
-	if (i < n){
-		if (i == 0) 
+		if (i == 0)
 			g_backwardMask[i] = 1;
 		else {
 			g_backwardMask[i] = (g_in[i] != g_in[i - 1]);
 		}
 
-		if (i== (n-1 ) )
+		if (i == (n - 1))
 			g_forwardMask[i] = 1;
 		else {
 			g_forwardMask[i] = (g_in[i] != g_in[i + 1]);
 		}
-
 	}
 }
 
@@ -84,7 +79,7 @@ void PrintArray(int* arr, int n){
 		printf("%d, ", arr[i]);
 		/*if ( (i+1) % j == (0) && i!=0 ){
 			printf("| ");
-		}*/
+			}*/
 	}
 	printf("\n");
 }
@@ -92,12 +87,12 @@ void PrintArray(int* arr, int n){
 char errorString[256];
 
 bool verifyCompression(
-	int* original, int n, 
+	int* original, int n,
 	int* compressedSymbols, int* compressedCounts, int totalRuns){
 
 	int* decompressed = new int[n];
 
-	
+
 
 	// decompress.
 	int j = 0;
@@ -112,16 +107,16 @@ bool verifyCompression(
 		return false;
 	}
 
-	
+
 	for (int i = 0; i < totalRuns; ++i){
 		int symbol = compressedSymbols[i];
-		int count  = compressedCounts[i];
+		int count = compressedCounts[i];
 
 		for (int k = 0; k < count; ++k){
 			decompressed[j++] = symbol;
 		}
 	}
-	
+
 	// verify the compression.
 	for (int i = 0; i < n; ++i) {
 		if (original[i] != decompressed[i]){
@@ -130,12 +125,12 @@ bool verifyCompression(
 			return false;
 		}
 	}
-	
+
 
 	return true;
 
 	//printf("Decompressed:     ");
-//	PrintArray(decompressed, n);
+	//	PrintArray(decompressed, n);
 
 
 
@@ -161,19 +156,19 @@ int* getRandomData(int n){
 }
 
 
-void unitTest(int* in, int n, int blockSize)
+void unitTest(int* in, int n)
 {
 
 	int* symbolsOut = new int[2 * n];
 	int* countsOut = new int[2 * n];
 
-	int totalRuns = parle(in, n, symbolsOut, countsOut, blockSize); // 1<<8
+	int totalRuns = parle(in, n, symbolsOut, countsOut); // 1<<8
 
-	
-	printf("n = %d, blockSize = %d\n", n, blockSize);
+
+	printf("n = %d\n", n);
 	printf("Original Size  : %d\n", n);
 	printf("Compressed Size: %d\n", totalRuns * 2);
-	
+
 	if (!verifyCompression(
 		in, n,
 		symbolsOut, countsOut, totalRuns)) {
@@ -192,6 +187,34 @@ void unitTest(int* in, int n, int blockSize)
 
 CUDPPHandle cudpp;
 
+void runTests(int a) {
+	printf("START\n");
+
+	for (int i = 4; i < a; ++i) {
+
+		for (int k = 0; k < 10; ++k) {
+
+			int n = 2 << i;
+
+			if (k != 0) {
+				// in first test, do with nice values for 'n'
+				// on the other two tests, do with slightly randomized values.
+				n *= (0.6f + 1.3f * (rand() / (float)RAND_MAX));
+			}
+
+			int* in = getRandomData(n);
+
+			unitTest(in, n);
+
+			delete[] in;
+		}
+
+		printf("-------------------------------\n\n");
+
+	}
+
+}
+
 int main()
 {
 
@@ -207,14 +230,14 @@ int main()
 	int* in = new int[n]
 	{
 
-		3, 3, 3, 3, 3, 
-	    3, 3, 3, 3, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+	3, 3, 3, 3, 3,
+	3, 3, 3, 3, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
 
 	}
 	;
-	
+
 	int i = 0;
-	in[i++] = 1; 
+	in[i++] = 1;
 	in[i++] = 4;
 	in[i++] = 4;
 	in[i++] = 4;
@@ -231,58 +254,20 @@ int main()
 	in[i++] = 4;
 	in[i++] = 5;
 	in[i++] = 6;
-	
-	
-	
+
+
+
 	unitTest(in, n,  8); // 35
 
 
 	delete[]in;
 	*/
-	
-	
 
-	printf("START\n");
-	
-	for (int i = 4; i < 19; ++i) {
-
-		for (int j = 2; j < (i); ++j) {
-
-			for (int k = 0; k < 3; ++k) {
-
-				int n = 2 << i;
-				int blockSize = 2 << j;
-
-				if (blockSize >= 2048)
-					continue; // unallowed blocksize.
-
-				if (k != 0) {
-					// in first test, do with nice values for 'n'
-					// on the other two tests, do with slightly randomized values.
-					n *= (0.6f + 1.3f * (rand() / (float)RAND_MAX));
-				}
-				
-				int* in = getRandomData(n);
-
-				unitTest(in, n, blockSize);
-
-				delete[] in;
-			}
+	runTests(20);
 
 
-		}
-		printf("-------------------------------\n\n");
-
-	}
-
-	
-	
-	
-
-
-	
 	CUDA_CHECK(cudaDeviceReset());
-	
+
 
 	printf("DONE\n");
 
@@ -299,10 +284,10 @@ void scan(int* d_in, int* d_out, int N) {
 	config.datatype = CUDPP_INT;
 	config.algorithm = CUDPP_SCAN;
 	config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_EXCLUSIVE;
-	
+
 	CUDPPHandle plan = 0;
 	CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
-	
+
 	if (CUDPP_SUCCESS != res){
 		printf("Error creating CUDPPPlan for scan!\n");
 		exit(-1);
@@ -329,7 +314,7 @@ void reduce(int* d_in, int* d_out, int N) {
 	config.datatype = CUDPP_INT;
 	config.algorithm = CUDPP_REDUCE;
 	config.options = 0;
-	
+
 	CUDPPHandle plan = 0;
 	CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
 
@@ -355,8 +340,7 @@ void reduce(int* d_in, int* d_out, int N) {
 
 int parle(int *h_in, int n,
 	int* h_symbolsOut,
-	int* h_countsOut,
-	int blockSize){
+	int* h_countsOut){
 
 	int* d_backwardMask;
 	int* d_scannedBackwardMask;
@@ -368,36 +352,12 @@ int parle(int *h_in, int n,
 	int* d_minus;
 
 
-	int allowedBlockSizes[] = {
-		1 << 2,
-		1 << 3,
-		1 << 4,
-		1 << 5,
-		1 << 6,
-		1 << 7,
-		1 << 8,
-		1 << 9,
-		1 << 10 };
-
-	bool allowed = false;
-	for (const int s : allowedBlockSizes) {
-		if (s == blockSize) {
-			allowed = true;
-			break;
-		}
-	}
-
-	if (!allowed) {
-		printf("Unallowed block size: %d\n", blockSize);
-		exit(1);
-	}
 
 	int* d_symbolsOut;
 	int* d_countsOut;
 	int* d_totalRuns; // keeps track of the total number of runs that the data was compressed down to.
 
-	const int BLOCK_SIZE = blockSize;
-	const int BLOCK_COUNT = (n + BLOCK_SIZE-1) / BLOCK_SIZE;
+
 	const int N = n;
 
 
@@ -410,16 +370,16 @@ int parle(int *h_in, int n,
 	printf("orig:             ");
 	PrintArray(h_in, n);
 	*/
-	
 
-	
+
+
 	// allocate resources on device. 
 	CUDA_CHECK(cudaMalloc((void**)&d_in, N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, N * sizeof(int)));
-	
+
 	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, 2 * N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, 2 * N * sizeof(int)));
 
@@ -434,66 +394,64 @@ int parle(int *h_in, int n,
 
 
 	// get forward and backward mask. 
-	maskKernel<<<BLOCK_COUNT, BLOCK_SIZE>>>(d_in, d_backwardMask, d_forwardMask, N);
-	
+	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, N);
+
+
 	scan(d_backwardMask, d_scannedBackwardMask, N);
 	scan(d_forwardMask, d_scannedForwardMask, N);
 
 	reduce(d_backwardMask, d_totalRuns, N);
 
-	scatterKernel << <BLOCK_COUNT, BLOCK_SIZE >> >(
-		d_backwardMask, d_scannedBackwardMask, 
+	hemi::cudaLaunch(scatterKernel, d_backwardMask, d_scannedBackwardMask,
 		d_forwardMask, d_scannedForwardMask,
-
-		d_in, 
+		d_in,
 		d_symbolsOut, d_countsOut, N, d_plus, d_minus);
-		
 
-	sumKernel<<<BLOCK_COUNT, BLOCK_SIZE >>>(d_countsOut, N, d_plus, d_minus);
 
+	hemi::cudaLaunch(sumKernel, d_countsOut, N, d_plus, d_minus);
 
 	CUDA_CHECK(cudaGetLastError());
-	
-	int* h_backwardMask        = new int[N];
-	int* h_forwardMask         = new int[N];
+
+	int* h_backwardMask = new int[N];
+	int* h_forwardMask = new int[N];
 	int* h_scannedBackwardMask = new int[N];
-	int* h_scannedForwardMask  = new int[N];
+	int* h_scannedForwardMask = new int[N];
 
 
-	int* h_plus = new int[2*N];
-	int* h_minus = new int[2*N];
+	int* h_plus = new int[2 * N];
+	int* h_minus = new int[2 * N];
 
 	int h_totalRuns;
 
-	
+
 	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
-	
+
 	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 
 
-	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, 2*n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, 2 *n*sizeof(int), cudaMemcpyDeviceToHost));
-	
+	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
+
 	CUDA_CHECK(cudaMemcpy(&h_totalRuns, d_totalRuns, sizeof(int), cudaMemcpyDeviceToHost));
 
 	CUDA_CHECK(cudaMemcpy(h_plus, d_plus, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_minus, d_minus, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
 
 
-	
+
 	CUDA_CHECK(cudaDeviceSynchronize());
 
-	
+
 	/*
 	printf("Backward:         ");
 	PrintArray(h_backwardMask, N);
-	
+
 	printf("Forward:          ");
 	PrintArray(h_forwardMask, N);
 
-	
+
 	printf("Scanned Backward: ");
 	PrintArray(h_scannedBackwardMask, N);
 
@@ -507,16 +465,16 @@ int parle(int *h_in, int n,
 
 	printf("h_countsOut:      ");
 	PrintArray(h_countsOut, h_totalRuns);
-	
+
 	printf("h_plus:     ");
 	PrintArray(h_plus, h_totalRuns);
 
 	printf("h_minus:      ");
 	PrintArray(h_minus, h_totalRuns);
 	*/
-	
-	
-	
+
+
+
 
 
 	delete[] h_backwardMask;
@@ -525,7 +483,7 @@ int parle(int *h_in, int n,
 	delete[] h_scannedForwardMask;
 
 	CUDA_CHECK(cudaFree(d_in));
-	
+
 	CUDA_CHECK(cudaFree(d_backwardMask));
 	CUDA_CHECK(cudaFree(d_forwardMask));
 	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
@@ -535,52 +493,52 @@ int parle(int *h_in, int n,
 	CUDA_CHECK(cudaFree(d_symbolsOut));
 
 	CUDA_CHECK(cudaFree(d_totalRuns));
-	
+
 	return h_totalRuns;
-	
+
 }
 
 /*
 // Helper function for using CUDA to add vectors in parallel.
 void scan(int *in, int* out, int n)
 {
-	int *inBuffer = 0;
-	int *outBuffer = 0;
+int *inBuffer = 0;
+int *outBuffer = 0;
 
-	const unsigned int BLOCK_SIZE = 1024;
- 
+const unsigned int BLOCK_SIZE = 1024;
 
-	CUDA_CHECK(cudaMalloc((void**)&inBuffer, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&outBuffer, n * sizeof(int)));
 
-	CUDA_CHECK(cudaMemcpy(inBuffer, in, n * sizeof(int), cudaMemcpyHostToDevice));
-	
-	// warm up.
-	scanKernel<<<1, n, sizeof(int)*n*2 >> >( inBuffer, outBuffer, n);
-	
-	
-	for (int i = 0; i < 20; ++i){
-		cudaDeviceSynchronize();
-		sdkStartTimer(&timer);
-	
-		scanKernel << <1, n, sizeof(int)*n * 2 >> >(inBuffer, outBuffer, n);
+CUDA_CHECK(cudaMalloc((void**)&inBuffer, n * sizeof(int)));
+CUDA_CHECK(cudaMalloc((void**)&outBuffer, n * sizeof(int)));
 
-		// Copy output vector from GPU buffer to host memory.
-		cudaDeviceSynchronize();
-		sdkStopTimer(&timer);
-	}
-		
-	double reduceTime = sdkGetAverageTimerValue(&timer) * 1e-3;	
-	printf("average: %.4f GB/s, Time = %.5f s\n", 1.0e-9 * ( (double)  (sizeof( int)*n)/reduceTime  ), reduceTime     );
-	
+CUDA_CHECK(cudaMemcpy(inBuffer, in, n * sizeof(int), cudaMemcpyHostToDevice));
 
-	
-	CUDA_CHECK(cudaMemcpy(out, outBuffer, n * sizeof(int), cudaMemcpyDeviceToHost));
+// warm up.
+scanKernel<<<1, n, sizeof(int)*n*2 >> >( inBuffer, outBuffer, n);
 
-	CUDA_CHECK(cudaGetLastError());
-	CUDA_CHECK(cudaDeviceSynchronize());
 
-	cudaFree(inBuffer);
-	cudaFree(outBuffer);
+for (int i = 0; i < 20; ++i){
+cudaDeviceSynchronize();
+sdkStartTimer(&timer);
+
+scanKernel << <1, n, sizeof(int)*n * 2 >> >(inBuffer, outBuffer, n);
+
+// Copy output vector from GPU buffer to host memory.
+cudaDeviceSynchronize();
+sdkStopTimer(&timer);
+}
+
+double reduceTime = sdkGetAverageTimerValue(&timer) * 1e-3;
+printf("average: %.4f GB/s, Time = %.5f s\n", 1.0e-9 * ( (double)  (sizeof( int)*n)/reduceTime  ), reduceTime     );
+
+
+
+CUDA_CHECK(cudaMemcpy(out, outBuffer, n * sizeof(int), cudaMemcpyDeviceToHost));
+
+CUDA_CHECK(cudaGetLastError());
+CUDA_CHECK(cudaDeviceSynchronize());
+
+cudaFree(inBuffer);
+cudaFree(outBuffer);
 }
 */
