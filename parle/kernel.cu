@@ -13,7 +13,17 @@
 #include "hemi/grid_stride_range.h"
 #include "hemi/launch.h"
 
-int parle(int *in, int n,
+
+
+
+void parleDevice(int *d_in, int n,
+	int* d_symbolsOut,
+	int* d_countsOut,
+	int* d_totalRuns
+	);
+
+
+int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
 	int* h_countsOut);
 
@@ -162,7 +172,7 @@ void unitTest(int* in, int n)
 	int* symbolsOut = new int[n];
 	int* countsOut = new int[n];
 
-	int totalRuns = parle(in, n, symbolsOut, countsOut); // 1<<8
+	int totalRuns = parleHost(in, n, symbolsOut, countsOut); // 1<<8
 
 
 	printf("n = %d\n", n);
@@ -263,7 +273,7 @@ int main()
 	delete[]in;
 	*/
 
-	runTests(18);
+	runTests(20);
 
 
 	CUDA_CHECK(cudaDeviceReset());
@@ -337,32 +347,19 @@ void reduce(int* d_in, int* d_out, int N) {
 	}
 }
 
-
-int parle(int *h_in, int n,
+int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
 	int* h_countsOut){
 
-	int* d_backwardMask;
-	int* d_scannedBackwardMask;
-	int* d_scannedForwardMask;
-	int* d_forwardMask;
-	int* d_in;
-
-	int* d_plus;
-	int* d_minus;
-
-
-
 	int* d_symbolsOut;
 	int* d_countsOut;
-	int* d_totalRuns; // keeps track of the total number of runs that the data was compressed down to.
+	int* d_in;
+	int* d_totalRuns;
 
-
-	const int N = n;
-
+	int h_totalRuns;
 
 	/*
-	printf("N: %d\n", N);
+	printf("N: %d\n", n);
 	printf("n: %d\n", n);
 	printf("blocksize: %d\n", BLOCK_SIZE);
 	printf("BLOCK_COUNT: %d\n", BLOCK_COUNT);
@@ -371,80 +368,96 @@ int parle(int *h_in, int n,
 	PrintArray(h_in, n);
 	*/
 
-
-
-	// allocate resources on device. 
-	CUDA_CHECK(cudaMalloc((void**)&d_in, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, N * sizeof(int)));
-
-	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, N * sizeof(int)));
-
-	CUDA_CHECK(cudaMalloc((void**)&d_minus, N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_plus, N * sizeof(int)));
-
-
+	// MALLOC
+	CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, n * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
 
 	// transer input data to device.
-	CUDA_CHECK(cudaMemcpy(d_in, h_in, N*sizeof(int), cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(d_in, h_in, n*sizeof(int), cudaMemcpyHostToDevice));
+
+
+	// RUN.
+	parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
+
+	// MEMCPY
+	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(&h_totalRuns, d_totalRuns, sizeof(int), cudaMemcpyDeviceToHost));
+
+	// FREE
+	CUDA_CHECK(cudaFree(d_in));
+	CUDA_CHECK(cudaFree(d_countsOut));
+	CUDA_CHECK(cudaFree(d_symbolsOut));
+	CUDA_CHECK(cudaFree(d_totalRuns));
+
+	return h_totalRuns;
+
+}
+
+void parleDevice(int *d_in, int n,
+	int* d_symbolsOut,
+	int* d_countsOut,
+	int* d_totalRuns // keeps track of the total number of runs that the data was compressed down to.
+	){
+
+	int* d_backwardMask;
+	int* d_scannedBackwardMask;
+	int* d_scannedForwardMask;
+	int* d_forwardMask;
+	int* d_plus;
+	int* d_minus;
+
+	// allocate resources on device. 
+	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_minus, n * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_plus, n * sizeof(int)));
+
+
+	
 
 
 	// get forward and backward mask. 
-	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, N);
+	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, n);
 
 
-	scan(d_backwardMask, d_scannedBackwardMask, N);
-	scan(d_forwardMask, d_scannedForwardMask, N);
+	scan(d_backwardMask, d_scannedBackwardMask, n);
+	scan(d_forwardMask, d_scannedForwardMask, n);
 
-	reduce(d_backwardMask, d_totalRuns, N);
+	reduce(d_backwardMask, d_totalRuns, n);
 
 	hemi::cudaLaunch(scatterKernel, d_backwardMask, d_scannedBackwardMask,
 		d_forwardMask, d_scannedForwardMask,
 		d_in,
-		d_symbolsOut, d_countsOut, N, d_plus, d_minus);
+		d_symbolsOut, d_countsOut, n, d_plus, d_minus);
 
 
-	hemi::cudaLaunch(sumKernel, d_countsOut, N, d_plus, d_minus);
+	hemi::cudaLaunch(sumKernel, d_countsOut, n, d_plus, d_minus);
 
-	CUDA_CHECK(cudaGetLastError());
+	/*
+	int* h_backwardMask = new int[n];
+	int* h_forwardMask = new int[n];
+	int* h_scannedBackwardMask = new int[n];
+	int* h_scannedForwardMask = new int[n];
+	int* h_plus = new int[n];
+	int* h_minus = new int[n];
 
-	int* h_backwardMask = new int[N];
-	int* h_forwardMask = new int[N];
-	int* h_scannedBackwardMask = new int[N];
-	int* h_scannedForwardMask = new int[N];
+	
 
+	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
 
-	int* h_plus = new int[N];
-	int* h_minus = new int[N];
-
-	int h_totalRuns;
-
-
-	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
-
-	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
-
-
-	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
-
-	CUDA_CHECK(cudaMemcpy(&h_totalRuns, d_totalRuns, sizeof(int), cudaMemcpyDeviceToHost));
-
+	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
+	
 	CUDA_CHECK(cudaMemcpy(h_plus, d_plus, n*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_minus, d_minus, n*sizeof(int), cudaMemcpyDeviceToHost));
 
-
-
-	CUDA_CHECK(cudaDeviceSynchronize());
-
-
-	/*
+	
 	printf("Backward:         ");
 	PrintArray(h_backwardMask, N);
 
@@ -471,7 +484,7 @@ int parle(int *h_in, int n,
 
 	printf("h_minus:      ");
 	PrintArray(h_minus, h_totalRuns);
-	*/
+	
 
 
 
@@ -481,20 +494,18 @@ int parle(int *h_in, int n,
 	delete[] h_forwardMask;
 	delete[] h_scannedBackwardMask;
 	delete[] h_scannedForwardMask;
+	*/
 
-	CUDA_CHECK(cudaFree(d_in));
 
 	CUDA_CHECK(cudaFree(d_backwardMask));
 	CUDA_CHECK(cudaFree(d_forwardMask));
 	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
 	CUDA_CHECK(cudaFree(d_scannedForwardMask));
 
-	CUDA_CHECK(cudaFree(d_countsOut));
-	CUDA_CHECK(cudaFree(d_symbolsOut));
+	CUDA_CHECK(cudaFree(d_plus));
+	CUDA_CHECK(cudaFree(d_minus));
 
-	CUDA_CHECK(cudaFree(d_totalRuns));
 
-	return h_totalRuns;
 
 }
 
