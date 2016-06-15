@@ -159,8 +159,8 @@ int* getRandomData(int n){
 void unitTest(int* in, int n)
 {
 
-	int* symbolsOut = new int[2 * n];
-	int* countsOut = new int[2 * n];
+	int* symbolsOut = new int[n];
+	int* countsOut = new int[n];
 
 	int totalRuns = parle(in, n, symbolsOut, countsOut); // 1<<8
 
@@ -263,7 +263,7 @@ int main()
 	delete[]in;
 	*/
 
-	runTests(20);
+	runTests(18);
 
 
 	CUDA_CHECK(cudaDeviceReset());
@@ -380,11 +380,11 @@ int parle(int *h_in, int n,
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, N * sizeof(int)));
 
-	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, 2 * N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, 2 * N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, N * sizeof(int)));
 
-	CUDA_CHECK(cudaMalloc((void**)&d_minus, 2 * N * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_plus, 2 * N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_minus, N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_plus, N * sizeof(int)));
 
 
 	CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
@@ -418,8 +418,8 @@ int parle(int *h_in, int n,
 	int* h_scannedForwardMask = new int[N];
 
 
-	int* h_plus = new int[2 * N];
-	int* h_minus = new int[2 * N];
+	int* h_plus = new int[N];
+	int* h_minus = new int[N];
 
 	int h_totalRuns;
 
@@ -431,13 +431,13 @@ int parle(int *h_in, int n,
 	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, N*sizeof(int), cudaMemcpyDeviceToHost));
 
 
-	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
 
 	CUDA_CHECK(cudaMemcpy(&h_totalRuns, d_totalRuns, sizeof(int), cudaMemcpyDeviceToHost));
 
-	CUDA_CHECK(cudaMemcpy(h_plus, d_plus, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_minus, d_minus, 2 * n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_plus, d_plus, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_minus, d_minus, n*sizeof(int), cudaMemcpyDeviceToHost));
 
 
 
