@@ -14,6 +14,26 @@
 #include "hemi/launch.h"
 
 
+const int NUM_TESTS = 10;
+const int Tests[NUM_TESTS] = {
+	10000,
+	50000, 
+	100000, 
+	200000, 
+	500000, 
+	1000000,
+	2000000,
+	5000000,
+	10000000,
+	20000000,
+
+};
+
+const int TRIALS = 100;
+
+
+CUDPPHandle cudpp;
+
 
 
 void parleDevice(int *d_in, int n,
@@ -22,7 +42,6 @@ void parleDevice(int *d_in, int n,
 	int* d_totalRuns
 	);
 
-
 int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
 	int* h_countsOut);
@@ -30,8 +49,6 @@ int parleHost(int *h_in, int n,
 int parleCpu(int *in, int n,
 	int* symbolsOut,
 	int* countsOut);
-
-
 
 __global__ void sumKernel(int *g_countsOut, int n, int* plus, int* minus) {
 	for (int i : hemi::grid_stride_range(0, n)) {
@@ -178,7 +195,7 @@ int* getRandomData(int n){
 
 
 template<typename F>
-void unitTest(int* in, int n, F rle)
+void unitTest(int* in, int n, F rle, bool verbose)
 {
 
 	int* symbolsOut = new int[n];
@@ -187,9 +204,11 @@ void unitTest(int* in, int n, F rle)
 	int totalRuns = rle(in, n, symbolsOut, countsOut);
 		//parleHost(in, n, symbolsOut, countsOut); // 1<<8
 
-	printf("n = %d\n", n);
-	printf("Original Size  : %d\n", n);
-	printf("Compressed Size: %d\n", totalRuns * 2);
+	if (verbose) {
+		printf("n = %d\n", n);
+		printf("Original Size  : %d\n", n);
+		printf("Compressed Size: %d\n", totalRuns * 2);
+	}
 
 	if (!verifyCompression(
 		in, n,
@@ -200,14 +219,126 @@ void unitTest(int* in, int n, F rle)
 		exit(1);
 	}
 	else {
-		printf("passed test!\n\n");
+		if (verbose)
+			printf("passed test!\n\n");
 	}
 
 	delete[] symbolsOut;
 	delete[] countsOut;
 }
 
-CUDPPHandle cudpp;
+
+template<typename F>
+void profileCpu(F rle) {
+
+	for (int i = 0; i < NUM_TESTS; ++i) {
+
+
+		int n = Tests[i];
+		
+		int* in = getRandomData(n);
+		int* symbolsOut = new int[n];
+		int* countsOut = new int[n];
+
+
+		for (int i = 0; i < TRIALS; ++i) {	
+
+			sdkStartTimer(&timer);
+
+			rle(in, n, symbolsOut, countsOut);
+
+			sdkStopTimer(&timer);
+
+		}
+
+		// also unit test, to make sure that the compression is valid.
+		unitTest(in, n, rle, false);
+
+
+		printf("For n = %d, in time %.5f\n", n, sdkGetAverageTimerValue(&timer)*1e-3);
+		
+
+		delete[] in;
+		delete[] symbolsOut;
+		delete[] countsOut;
+
+	}
+
+}
+
+void profileGpu() {
+
+	cudaEvent_t start, stop;
+
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+
+	for (int i = 0; i < NUM_TESTS; ++i) {
+
+
+		int n = Tests[i];
+
+		int* in = getRandomData(n);
+		int* symbolsOut = new int[n];
+		int* countsOut = new int[n];
+
+
+
+
+		int* d_symbolsOut;
+		int* d_countsOut;
+		int* d_in;
+		int* d_totalRuns;
+
+		int h_totalRuns;
+
+
+		// MALLOC
+		CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(int)));
+		CUDA_CHECK(cudaMalloc((void**)&d_countsOut, n * sizeof(int)));
+		CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, n * sizeof(int)));
+		CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
+
+		// transer input data to device.
+		CUDA_CHECK(cudaMemcpy(d_in, in, n*sizeof(int), cudaMemcpyHostToDevice));
+
+		cudaEventRecord(start);
+
+		for (int i = 0; i < TRIALS; ++i) {
+
+			// RUN.
+			parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
+
+			
+		}
+
+
+		cudaEventRecord(stop);
+		cudaDeviceSynchronize();
+
+		// FREE
+		CUDA_CHECK(cudaFree(d_in));
+		CUDA_CHECK(cudaFree(d_countsOut));
+		CUDA_CHECK(cudaFree(d_symbolsOut));
+		CUDA_CHECK(cudaFree(d_totalRuns));
+
+		// also unit test, to make sure that the compression is valid.
+		unitTest(in, n, parleHost, false);
+
+		float ms;
+		cudaEventElapsedTime(&ms, start, stop);
+		printf("For n = %d, in time %.5f\n", n, (ms/((float)TRIALS ) ) /1000.0f);
+
+
+		delete[] in;
+		delete[] symbolsOut;
+		delete[] countsOut;
+
+	}
+
+}
+
 
 template<typename F>
 void runTests(int a, F rle) {
@@ -228,15 +359,13 @@ void runTests(int a, F rle) {
 
 			int* in = getRandomData(n);
 
-			unitTest(in, n, rle);
+			unitTest(in, n, rle, true);
 
 			delete[] in;
 		}
 
 		printf("-------------------------------\n\n");
-
 	}
-
 }
 
 int main()
@@ -303,7 +432,17 @@ int main()
 	
 
 	
-	runTests(23, rle);
+	//runTests(23, rle);
+
+	
+	printf("For CPU\n");
+	profileCpu(rleCpu);
+
+	//printf("For GPU\n");
+	//profileCpu(rleGpu);
+	
+	printf("For GPU\n");
+	profileGpu();
 
 	CUDA_CHECK(cudaDeviceReset());
 
