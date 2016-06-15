@@ -27,6 +27,10 @@ int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
 	int* h_countsOut);
 
+int parleCpu(int *in, int n,
+	int* symbolsOut,
+	int* countsOut);
+
 
 
 __global__ void sumKernel(int *g_countsOut, int n, int* plus, int* minus) {
@@ -114,6 +118,14 @@ bool verifyCompression(
 
 	if (sum != n) {
 		sprintf(errorString, "Decompressed and original size not equal %d != %d\n", n, sum);
+
+		for (int i = 0; i < totalRuns; ++i){
+			int symbol = compressedSymbols[i];
+			int count = compressedCounts[i];
+
+			printf("%d, %d\n", count, symbol);
+		}
+
 		return false;
 	}
 
@@ -147,7 +159,6 @@ bool verifyCompression(
 
 }
 
-
 int* getRandomData(int n){
 
 	int* in = new int[n];
@@ -166,14 +177,15 @@ int* getRandomData(int n){
 }
 
 
-void unitTest(int* in, int n)
+template<typename F>
+void unitTest(int* in, int n, F rle)
 {
 
 	int* symbolsOut = new int[n];
 	int* countsOut = new int[n];
 
-	int totalRuns = parleHost(in, n, symbolsOut, countsOut); // 1<<8
-
+	int totalRuns = rle(in, n, symbolsOut, countsOut);
+		//parleHost(in, n, symbolsOut, countsOut); // 1<<8
 
 	printf("n = %d\n", n);
 	printf("Original Size  : %d\n", n);
@@ -197,9 +209,11 @@ void unitTest(int* in, int n)
 
 CUDPPHandle cudpp;
 
-void runTests(int a) {
+template<typename F>
+void runTests(int a, F rle) {
 	printf("START\n");
 
+	
 	for (int i = 4; i < a; ++i) {
 
 		for (int k = 0; k < 10; ++k) {
@@ -209,12 +223,12 @@ void runTests(int a) {
 			if (k != 0) {
 				// in first test, do with nice values for 'n'
 				// on the other two tests, do with slightly randomized values.
-				n *= (0.6f + 1.3f * (rand() / (float)RAND_MAX));
+				n = (int)(n * (0.6f + 1.3f * (rand() / (float)RAND_MAX)));
 			}
 
 			int* in = getRandomData(n);
 
-			unitTest(in, n);
+			unitTest(in, n, rle);
 
 			delete[] in;
 		}
@@ -234,6 +248,20 @@ int main()
 
 
 	cudppCreate(&cudpp);
+
+	auto rleGpu = [](int *in, int n,
+		int* symbolsOut,
+		int* countsOut){
+		return parleHost(in, n, symbolsOut, countsOut);
+	};
+	
+	auto rleCpu = [](int *in, int n,
+		int* symbolsOut,
+		int* countsOut){
+		return parleCpu(in, n, symbolsOut, countsOut);
+	};
+
+	auto rle = rleCpu;
 
 	/*
 	int n =40;
@@ -267,14 +295,15 @@ int main()
 
 
 
-	unitTest(in, n,  8); // 35
+	unitTest(in, n, rle); // 35
 
 
 	delete[]in;
-	*/
+	*/ 
+	
 
-	runTests(20);
-
+	
+	runTests(23, rle);
 
 	CUDA_CHECK(cudaDeviceReset());
 
@@ -345,6 +374,49 @@ void reduce(int* d_in, int* d_out, int N) {
 		printf("Error destroying CUDPPPlan for reduce\n");
 		exit(-1);
 	}
+}
+
+int parleCpu(int *in, int n,
+	int* symbolsOut,
+	int* countsOut){
+
+	if (n == 0)
+		return 0; // nothing to compress!
+
+
+	int outIndex = 0;
+	int symbol = in[0];
+	int count = 1;
+
+	for (int i = 1; i < n; ++i) {
+
+		if (in[i] != symbol) {
+			// run is over.
+
+			// So output run.
+			symbolsOut[outIndex] = symbol;
+			countsOut[outIndex] = count;
+			outIndex++;
+
+			// and start new run:
+			symbol = in[i];
+			count = 1;
+		}
+		else {
+			// run is not over yet.
+			++count;
+		}
+
+	}
+
+	if (count > 0) {
+		// output last run. 
+		symbolsOut[outIndex] = symbol;
+		countsOut[outIndex] = count;
+	}
+
+	return outIndex+1;
+
 }
 
 int parleHost(int *h_in, int n,
