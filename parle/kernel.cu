@@ -13,6 +13,11 @@
 #include "hemi/grid_stride_range.h"
 #include "hemi/launch.h"
 
+#include "chag/pp/prefix.cuh"
+#include "chag/pp/reduce.cuh"
+
+namespace pp = chag::pp;
+
 
 const int NUM_TESTS = 10;
 const int Tests[NUM_TESTS] = {
@@ -39,12 +44,13 @@ CUDPPHandle cudpp;
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
-	int* d_totalRuns
+	int* d_totalRuns,
+	bool useChag
 	);
 
 int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
-	int* h_countsOut);
+	int* h_countsOut, bool useChag);
 
 int parleCpu(int *in, int n,
 	int* symbolsOut,
@@ -315,7 +321,8 @@ void profileCpu(F rle) {
 
 }
 
-void profileGpu() {
+template<typename F>
+void profileGpu(bool useChag, F f) {
 
 	cudaEvent_t start, stop;
 
@@ -357,7 +364,7 @@ void profileGpu() {
 		for (int i = 0; i < TRIALS; ++i) {
 
 			// RUN.
-			parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
+			parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns, useChag);
 
 			
 		}
@@ -373,7 +380,7 @@ void profileGpu() {
 		CUDA_CHECK(cudaFree(d_totalRuns));
 
 		// also unit test, to make sure that the compression is valid.
-		unitTest(in, n, parleHost, false);
+		unitTest(in, n, f, false);
 
 		float ms;
 		cudaEventElapsedTime(&ms, start, stop);
@@ -427,10 +434,16 @@ int main()
 
 	cudppCreate(&cudpp);
 
-	auto rleGpu = [](int *in, int n,
+	auto rleGpuCudpp = [](int *in, int n,
 		int* symbolsOut,
 		int* countsOut){
-		return parleHost(in, n, symbolsOut, countsOut);
+		return parleHost(in, n, symbolsOut, countsOut, false);
+	};
+
+	auto rleGpuChag = [](int *in, int n,
+		int* symbolsOut,
+		int* countsOut){
+		return parleHost(in, n, symbolsOut, countsOut, true);
 	};
 	
 	auto rleCpu = [](int *in, int n,
@@ -439,7 +452,7 @@ int main()
 		return parleCpu(in, n, symbolsOut, countsOut);
 	};
 
-	auto rle = rleGpu;
+//	auto rle = rleGpu;
 
 	
 	/*
@@ -487,30 +500,39 @@ int main()
 
 
 
-	delete[]in;*/
-	
+	delete[]in;
+	*/
 	
 	
 	
 
 	// uni tests
-	//runTests(21, rle);
+	//runTests(21, rleGpuChag);
+
+	//runTests(21, rleGpuCudpp);
 
 	
-	/*
-	printf("For CPU\n");
-	profileCpu(rleCpu);
+	
+//	printf("For CPU\n");
+//	profileCpu(rleCpu);
 
 	//printf("For GPU\n");
 	//profileCpu(rleGpu);
 	
-	printf("For GPU\n");
-	profileGpu();
-	*/
 
+	
+	//printf("For GPU CUDPP\n");
+	//profileGpu(false, rleGpuChag);
+	
+
+	//printf("For GPU CHAG\n");
+	//profileGpu(true, rleGpuChag);
+	
 
 
 	//Visual Prof
+	
+	
 	
 	int n = 1 << 23;
 
@@ -519,14 +541,12 @@ int main()
 	int* countsOut = new int[n];
 
 	// also unit test, to make sure that the compression is valid.
-	unitTest(in, n, rleGpu, true);
+	unitTest(in, n, rleGpuChag, true);
 
 
 	delete[] in;
 	delete[] symbolsOut;
 	delete[] countsOut;
-	
-
 
 
 
@@ -541,63 +561,78 @@ int main()
 }
 
 
-void scan(int* d_in, int* d_out, int N) {
+void scan(int* d_in, int* d_out, int N, bool useChag) {
 
-	CUDPPConfiguration config;
-	config.op = CUDPP_ADD;
-	config.datatype = CUDPP_INT;
-	config.algorithm = CUDPP_SCAN;
-	config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_EXCLUSIVE;
+	if (!useChag) {
+		CUDPPConfiguration config;
+		config.op = CUDPP_ADD;
+		config.datatype = CUDPP_INT;
+		config.algorithm = CUDPP_SCAN;
+		config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_EXCLUSIVE;
 
-	CUDPPHandle plan = 0;
-	CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
+		CUDPPHandle plan = 0;
+		CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
 
-	if (CUDPP_SUCCESS != res){
-		printf("Error creating CUDPPPlan for scan!\n");
-		exit(-1);
+		if (CUDPP_SUCCESS != res){
+			printf("Error creating CUDPPPlan for scan!\n");
+			exit(-1);
+		}
+
+		res = cudppScan(plan, d_out, d_in, N);
+		if (CUDPP_SUCCESS != res){
+			printf("Error in cudppScan()\n");
+			exit(-1);
+		}
+
+		res = cudppDestroyPlan(plan);
+		if (CUDPP_SUCCESS != res)
+		{
+			printf("Error destroying CUDPPPlan for scan\n");
+			exit(-1);
+		}
+	}
+	else {
+		pp::prefix(d_in, d_in + N, d_out);
 	}
 
-	res = cudppScan(plan, d_out, d_in, N);
-	if (CUDPP_SUCCESS != res){
-		printf("Error in cudppScan()\n");
-		exit(-1);
-	}
-
-	res = cudppDestroyPlan(plan);
-	if (CUDPP_SUCCESS != res)
-	{
-		printf("Error destroying CUDPPPlan for scan\n");
-		exit(-1);
-	}
 }
 
-void reduce(int* d_in, int* d_out, int N) {
+void reduce(int* d_in, int* d_out, int N, bool useChag) {
 
-	CUDPPConfiguration config;
-	config.op = CUDPP_ADD;
-	config.datatype = CUDPP_INT;
-	config.algorithm = CUDPP_REDUCE;
-	config.options = 0;
+	if (!useChag) {
 
-	CUDPPHandle plan = 0;
-	CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
+		CUDPPConfiguration config;
+		config.op = CUDPP_ADD;
+		config.datatype = CUDPP_INT;
+		config.algorithm = CUDPP_REDUCE;
+		config.options = 0;
 
-	if (CUDPP_SUCCESS != res){
-		printf("Error creating CUDPPPlan for reduce!\n");
-		exit(-1);
-	}
+		CUDPPHandle plan = 0;
+		CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
 
-	res = cudppReduce(plan, d_out, d_in, N);
-	if (CUDPP_SUCCESS != res){
-		printf("Error in cudppReduce()\n");
-		exit(-1);
-	}
+		if (CUDPP_SUCCESS != res){
+			printf("Error creating CUDPPPlan for reduce!\n");
+			exit(-1);
+		}
 
-	res = cudppDestroyPlan(plan);
-	if (CUDPP_SUCCESS != res)
-	{
-		printf("Error destroying CUDPPPlan for reduce\n");
-		exit(-1);
+		res = cudppReduce(plan, d_out, d_in, N);
+		if (CUDPP_SUCCESS != res){
+			printf("Error in cudppReduce()\n");
+			exit(-1);
+		}
+
+		res = cudppDestroyPlan(plan);
+		if (CUDPP_SUCCESS != res)
+		{
+			printf("Error destroying CUDPPPlan for reduce\n");
+			exit(-1);
+		}
+
+	}else{
+
+		pp::reduce(d_in, d_in + N, d_out);
+
+
 	}
 }
 
@@ -646,7 +681,8 @@ int parleCpu(int *in, int n,
 
 int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
-	int* h_countsOut){
+	int* h_countsOut,
+	bool useChag){
 
 	int* d_symbolsOut;
 	int* d_countsOut;
@@ -675,7 +711,7 @@ int parleHost(int *h_in, int n,
 
 
 	// RUN.
-	parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
+	parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns, useChag);
 
 	// MEMCPY
 	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
@@ -695,7 +731,8 @@ int parleHost(int *h_in, int n,
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
-	int* d_totalRuns // keeps track of the total number of runs that the data was compressed down to.
+	int* d_totalRuns, // keeps track of the total number of runs that the data was compressed down to.
+	bool useChag
 	){
 
 	int* d_backwardMask;
@@ -726,10 +763,10 @@ void parleDevice(int *d_in, int n,
 	*/
 	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, n);
 
-	scan(d_backwardMask, d_scannedBackwardMask, n);
-	scan(d_forwardMask, d_scannedForwardMask, n);
+	scan(d_backwardMask, d_scannedBackwardMask, n, useChag);
+	scan(d_forwardMask, d_scannedForwardMask, n, useChag);
 
-	reduce(d_backwardMask, d_totalRuns, n);
+	reduce(d_backwardMask, d_totalRuns, n, useChag);
 
 	hemi::cudaLaunch(scatterKernel, d_backwardMask, d_scannedBackwardMask,
 		d_forwardMask, d_scannedForwardMask,
