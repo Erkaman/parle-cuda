@@ -88,9 +88,56 @@ __global__ void scatterKernel(
 	}
 }
 
-__global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
-	for (int i : hemi::grid_stride_range(0, n)) {
 
+/*
+__global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
+
+	extern __shared__ int shared[];
+
+	const int RADIUS = 1;
+	const int BLOCK_SIZE = blockDim.x;
+
+	for (int gindex : hemi::grid_stride_range(0, n)) {
+
+		int lindex = threadIdx.x + RADIUS;
+
+		shared[lindex] = g_in[gindex];
+
+		if (threadIdx.x < RADIUS) {
+			shared[lindex - RADIUS] = g_in[gindex - RADIUS];
+			shared[lindex + BLOCK_SIZE] = g_in[gindex +BLOCK_SIZE];
+		}
+
+		__syncthreads();
+
+		if (gindex == 0)
+			g_backwardMask[gindex] = 1;
+		else {
+			// shared[lindex - 1]
+			g_backwardMask[gindex] = (shared[lindex] != shared[lindex - 1]);
+		}
+
+		if (gindex == (n - 1))
+			g_forwardMask[gindex] = 1;
+		else {
+			g_forwardMask[gindex] = (shared[lindex] !=	shared[lindex + 1]);
+		}
+		
+		
+	}
+}
+
+*/
+
+
+// 70% memory
+
+//unoptimized version.
+__global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
+
+	//__shared__ int
+
+	for (int i : hemi::grid_stride_range(0, n)) {
 		if (i == 0)
 			g_backwardMask[i] = 1;
 		else {
@@ -104,6 +151,8 @@ __global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, i
 		}
 	}
 }
+
+
 
 void PrintArray(int* arr, int n){
 	for (int i = 0; i < n; ++i){
@@ -347,7 +396,7 @@ void runTests(int a, F rle) {
 	
 	for (int i = 4; i < a; ++i) {
 
-		for (int k = 0; k < 10; ++k) {
+		for (int k = 0; k < 30; ++k) {
 
 			int n = 2 << i;
 
@@ -390,51 +439,65 @@ int main()
 		return parleCpu(in, n, symbolsOut, countsOut);
 	};
 
-	auto rle = rleCpu;
+	auto rle = rleGpu;
 
+	
 	/*
-	int n =40;
+	
+	int n = 260;
 	int* in = new int[n]
 	{
+		
+		9, 9, 9, 9, 9, 
+		9, 9, 9, 9, 9, 
+		9, 3, 3, 3, 3, 
+		3, 3, 5, 5, 5, 
+		5, 5, 5, 
+		
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 
-	3, 3, 3, 3, 3,
-	3, 3, 3, 3, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
 
+		1, 1, 5, 5, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 5, 5, 5, 5, 1, 1, 7, 7, 7, 7,
+			4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 8, 8,
+			8, 8, 8, 8, 8, 8, 8, 8, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 6, 6, 7
+			, 7, 7, 7, 7, 7, 3, 3, 3, 3, 3, 3, 
+			
+			1, 1, 1, 1, 1,
+			
+			8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 3, 3, 3, 3, 3, 3, 8, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+			5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 9, 5, 5, 5, 5, 
+			
+			5, 5, 5, 8, 5,
+			5, 
+
+			1, 1, 1, 1, 1, 1, 1, 1, 1, 
+
+			4, 4, 7, 4, 4, 
+			4, 6, 6, 6, 6, 
+			6, 6, 8, 8, 8,
+			8, 8, 7, 7, 7,		
+			1, 1, 1, 2, 2, 
+
+			
+			
 	}
 	;
 
-	int i = 0;
-	in[i++] = 1;
-	in[i++] = 4;
-	in[i++] = 4;
-	in[i++] = 4;
-	in[i++] = 4;
-	in[i++] = 4;
-	in[i++] = 2;
-	in[i++] = 1;
-
-	in[i++] = 2;
-	in[i++] = 2;
-	in[i++] = 2;
-	in[i++] = 2;
-	in[i++] = 2;
-	in[i++] = 4;
-	in[i++] = 5;
-	in[i++] = 6;
+	unitTest(in, n, rleGpu, true); // 35
 
 
 
-	unitTest(in, n, rle); // 35
-
-
-	delete[]in;
-	*/ 
+	delete[]in;*/
+	
+	
+	
 	
 
-	
-	//runTests(23, rle);
+	// uni tests
+	//runTests(21, rle);
 
 	
+	/*
 	printf("For CPU\n");
 	profileCpu(rleCpu);
 
@@ -443,6 +506,29 @@ int main()
 	
 	printf("For GPU\n");
 	profileGpu();
+	*/
+
+
+
+	//Visual Prof
+	
+	int n = 1 << 23;
+
+	int* in = getRandomData(n);
+	int* symbolsOut = new int[n];
+	int* countsOut = new int[n];
+
+	// also unit test, to make sure that the compression is valid.
+	unitTest(in, n, rleGpu, true);
+
+
+	delete[] in;
+	delete[] symbolsOut;
+	delete[] countsOut;
+	
+
+
+
 
 	CUDA_CHECK(cudaDeviceReset());
 
@@ -569,12 +655,11 @@ int parleHost(int *h_in, int n,
 
 	int h_totalRuns;
 
+	
 	/*
 	printf("N: %d\n", n);
 	printf("n: %d\n", n);
-	printf("blocksize: %d\n", BLOCK_SIZE);
-	printf("BLOCK_COUNT: %d\n", BLOCK_COUNT);
-
+	
 	printf("orig:             ");
 	PrintArray(h_in, n);
 	*/
@@ -629,12 +714,17 @@ void parleDevice(int *d_in, int n,
 	CUDA_CHECK(cudaMalloc((void**)&d_plus, n * sizeof(int)));
 
 
-	
+	/*
+	const int BLOCK_SIZE = 256;
+	hemi::ExecutionPolicy ep;
+	ep.setBlockSize(BLOCK_SIZE); // TODO: compute this using occupancy API.
+	ep.setSharedMemBytes((BLOCK_SIZE + 2)*sizeof(int));
 
 
 	// get forward and backward mask. 
+	hemi::cudaLaunch(ep, maskKernel, d_in, d_backwardMask, d_forwardMask, n);
+	*/
 	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, n);
-
 
 	scan(d_backwardMask, d_scannedBackwardMask, n);
 	scan(d_forwardMask, d_scannedForwardMask, n);
@@ -670,31 +760,31 @@ void parleDevice(int *d_in, int n,
 
 	
 	printf("Backward:         ");
-	PrintArray(h_backwardMask, N);
+	PrintArray(h_backwardMask, n);
 
 	printf("Forward:          ");
-	PrintArray(h_forwardMask, N);
+	PrintArray(h_forwardMask, n);
 
 
 	printf("Scanned Backward: ");
-	PrintArray(h_scannedBackwardMask, N);
+	PrintArray(h_scannedBackwardMask, n);
 
 	printf("Scanned Forward:  ");
-	PrintArray(h_scannedForwardMask, N);
+	PrintArray(h_scannedForwardMask, n);
+	
+	//printf("h_totalRuns:      %d\n", h_totalRuns);
 
-	printf("h_totalRuns:      %d\n", h_totalRuns);
+	//printf("h_symbolsOut:     ");
+	//PrintArray(h_symbolsOut, h_totalRuns);
 
-	printf("h_symbolsOut:     ");
-	PrintArray(h_symbolsOut, h_totalRuns);
+	//printf("h_countsOut:      ");
+	//PrintArray(h_countsOut, h_totalRuns);
 
-	printf("h_countsOut:      ");
-	PrintArray(h_countsOut, h_totalRuns);
+	//printf("h_plus:     ");
+	//PrintArray(h_plus, h_totalRuns);
 
-	printf("h_plus:     ");
-	PrintArray(h_plus, h_totalRuns);
-
-	printf("h_minus:      ");
-	PrintArray(h_minus, h_totalRuns);
+	//printf("h_minus:      ");
+	//PrintArray(h_minus, h_totalRuns);
 	
 
 
@@ -705,8 +795,9 @@ void parleDevice(int *d_in, int n,
 	delete[] h_forwardMask;
 	delete[] h_scannedBackwardMask;
 	delete[] h_scannedForwardMask;
-	*/
 
+	*/
+	
 
 	CUDA_CHECK(cudaFree(d_backwardMask));
 	CUDA_CHECK(cudaFree(d_forwardMask));
