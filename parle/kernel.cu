@@ -18,6 +18,7 @@
 
 namespace pp = chag::pp;
 
+bool improved = true;
 
 const int NUM_TESTS = 10;
 const int Tests[NUM_TESTS] = {
@@ -40,13 +41,13 @@ const int TRIALS = 100;
 CUDPPHandle cudpp;
 
 
-
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
 	int* d_totalRuns,
 	bool useChag
 	);
+
 
 int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
@@ -55,45 +56,6 @@ int parleHost(int *h_in, int n,
 int parleCpu(int *in, int n,
 	int* symbolsOut,
 	int* countsOut);
-
-__global__ void sumKernel(int *g_countsOut, int n, int* plus, int* minus) {
-	for (int i : hemi::grid_stride_range(0, n)) {
-		g_countsOut[i] = plus[i] + minus[i];
-	}
-
-}
-
-__global__ void scatterKernel(
-	int *g_backwardMask, int* g_scannedBackwardMask,
-	int *g_forwardMask, int* g_scannedForwardMask,
-	int *g_in,
-	int *g_symbolsOut, int *g_countsOut, int n, int* plus, int* minus) {
-
-	for (int i : hemi::grid_stride_range(0, n)) {
-
-		int offset;
-
-		if (g_backwardMask[i] == 1){
-
-			offset = g_scannedBackwardMask[i];
-
-			int symbol = g_in[i];
-
-			g_symbolsOut[offset] = symbol;
-			//g_countsOut[offset] += -i;
-			minus[offset] = -i;
-			//atomicAdd(&g_countsOut[offset], -i);
-		}
-		if (g_forwardMask[i] == 1){
-			offset = g_scannedForwardMask[i];
-			//g_countsOut[offset] += i+1;
-			plus[offset] = i + 1;
-			//atomicAdd(&g_countsOut[offset], i+1);
-		}
-
-	}
-}
-
 
 /*
 __global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
@@ -135,25 +97,58 @@ __global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, i
 
 */
 
+__global__ void compactKernel(int* g_in, int* g_scannedBackwardMask, int* g_compactedBackwardMask, int* g_totalRuns, int n) {
 
-// 70% memory
 
-//unoptimized version.
-__global__ void maskKernel(int *g_in, int* g_backwardMask, int* g_forwardMask, int n) {
+	for (int i : hemi::grid_stride_range(0, n)) {
 
-	//__shared__ int
+		if (i == (n - 1)) {
+			g_compactedBackwardMask[g_scannedBackwardMask[i] + 0] = i + 1;
+
+		//	printf("total runs in kernel %d\n", g_scannedBackwardMask[i]);
+
+			*g_totalRuns = g_scannedBackwardMask[i];
+
+		//	printf("total runs in kernel %d\n", *g_totalRuns);
+
+		}
+
+		if (i == 0) {
+			g_compactedBackwardMask[0] = 0;
+		}
+		else if (g_scannedBackwardMask[i] != g_scannedBackwardMask[i-1]) {
+
+			g_compactedBackwardMask[g_scannedBackwardMask[i] - 1] = i;
+
+		}
+
+	}
+}
+
+
+__global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, int* g_in, int* g_symbolsOut, int* g_countsOut) {
+
+	int n = *g_totalRuns;
+
+	for (int i : hemi::grid_stride_range(0, n)) {
+
+		int a = g_compactedBackwardMask[i];
+		int b = g_compactedBackwardMask[i+1];
+
+		g_symbolsOut[i] = g_in[a];
+		g_countsOut[i] = b-a;
+	}
+
+}
+
+
+__global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
 
 	for (int i : hemi::grid_stride_range(0, n)) {
 		if (i == 0)
 			g_backwardMask[i] = 1;
 		else {
 			g_backwardMask[i] = (g_in[i] != g_in[i - 1]);
-		}
-
-		if (i == (n - 1))
-			g_forwardMask[i] = 1;
-		else {
-			g_forwardMask[i] = (g_in[i] != g_in[i + 1]);
 		}
 	}
 }
@@ -455,85 +450,61 @@ int main()
 //	auto rle = rleGpu;
 
 	
-	/*
 	
-	int n = 260;
+	
+	/*
+	int n = 8;
 	int* in = new int[n]
 	{
-		
-		9, 9, 9, 9, 9, 
-		9, 9, 9, 9, 9, 
-		9, 3, 3, 3, 3, 
-		3, 3, 5, 5, 5, 
-		5, 5, 5, 
-		
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	//	1,2,3,4,4,4,2,2
 
+	//	1,1,2, 4,4,4,4,4
 
-		1, 1, 5, 5, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 5, 5, 5, 5, 1, 1, 7, 7, 7, 7,
-			4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 8, 8,
-			8, 8, 8, 8, 8, 8, 8, 8, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 6, 6, 7
-			, 7, 7, 7, 7, 7, 3, 3, 3, 3, 3, 3, 
-			
-			1, 1, 1, 1, 1,
-			
-			8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 3, 3, 3, 3, 3, 3, 8, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-			5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 9, 5, 5, 5, 5, 
-			
-			5, 5, 5, 8, 5,
-			5, 
-
-			1, 1, 1, 1, 1, 1, 1, 1, 1, 
-
-			4, 4, 7, 4, 4, 
-			4, 6, 6, 6, 6, 
-			6, 6, 8, 8, 8,
-			8, 8, 7, 7, 7,		
-			1, 1, 1, 2, 2, 
-
-			
-			
+		5,5,5,5,5,   1,2,3
 	}
 	;
 
-	unitTest(in, n, rleGpu, true); // 35
-
-
-
+	unitTest(in, n, rleGpuChag, true); // 35
 	delete[]in;
 	*/
 	
-	
+
 	
 
 	// uni tests
 	//runTests(21, rleGpuChag);
 
-	//runTests(21, rleGpuCudpp);
+	runTests(21, rleGpuCudpp);
 
 	
-	
-//	printf("For CPU\n");
-//	profileCpu(rleCpu);
+	/*
+	printf("For CPU\n");
+	profileCpu(rleCpu);
 
 	//printf("For GPU\n");
 	//profileCpu(rleGpu);
 	
 
 	
-	//printf("For GPU CUDPP\n");
-	//profileGpu(false, rleGpuChag);
+	printf("For GPU CUDPP\n");
+	profileGpu(false, rleGpuChag);
 	
+	*/
 
-	//printf("For GPU CHAG\n");
-	//profileGpu(true, rleGpuChag);
+
+	/*
+	printf("For GPU CHAG\n");
+	profileGpu(true, rleGpuChag);
 	
+	printf("For GPU CHAG\n");
+	profileGpu(true, rleGpuChag);
+	*/
 
 
 	//Visual Prof
 	
 	
-	
+	/*
 	int n = 1 << 23;
 
 	int* in = getRandomData(n);
@@ -547,6 +518,7 @@ int main()
 	delete[] in;
 	delete[] symbolsOut;
 	delete[] countsOut;
+	*/
 
 
 
@@ -560,80 +532,36 @@ int main()
 	return 0;
 }
 
+void scan2(int* d_in, int* d_out, int N, bool useChag) {
 
-void scan(int* d_in, int* d_out, int N, bool useChag) {
-
-	if (!useChag) {
 		CUDPPConfiguration config;
 		config.op = CUDPP_ADD;
 		config.datatype = CUDPP_INT;
 		config.algorithm = CUDPP_SCAN;
-		config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_EXCLUSIVE;
+		config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_INCLUSIVE;
 
 		CUDPPHandle plan = 0;
 		CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
 
 		if (CUDPP_SUCCESS != res){
-			printf("Error creating CUDPPPlan for scan!\n");
+			printf("Error creating CUDPPPlan for scan2!\n");
 			exit(-1);
 		}
 
 		res = cudppScan(plan, d_out, d_in, N);
 		if (CUDPP_SUCCESS != res){
-			printf("Error in cudppScan()\n");
+			printf("Error in cudppScan2()\n");
 			exit(-1);
 		}
 
 		res = cudppDestroyPlan(plan);
 		if (CUDPP_SUCCESS != res)
 		{
-			printf("Error destroying CUDPPPlan for scan\n");
-			exit(-1);
-		}
-	}
-	else {
-		pp::prefix(d_in, d_in + N, d_out);
-	}
-
-}
-
-void reduce(int* d_in, int* d_out, int N, bool useChag) {
-
-	if (!useChag) {
-
-		CUDPPConfiguration config;
-		config.op = CUDPP_ADD;
-		config.datatype = CUDPP_INT;
-		config.algorithm = CUDPP_REDUCE;
-		config.options = 0;
-
-		CUDPPHandle plan = 0;
-		CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
-
-		if (CUDPP_SUCCESS != res){
-			printf("Error creating CUDPPPlan for reduce!\n");
+			printf("Error destroying CUDPPPlan for scan2\n");
 			exit(-1);
 		}
 
-		res = cudppReduce(plan, d_out, d_in, N);
-		if (CUDPP_SUCCESS != res){
-			printf("Error in cudppReduce()\n");
-			exit(-1);
-		}
 
-		res = cudppDestroyPlan(plan);
-		if (CUDPP_SUCCESS != res)
-		{
-			printf("Error destroying CUDPPPlan for reduce\n");
-			exit(-1);
-		}
-
-	}else{
-
-		pp::reduce(d_in, d_in + N, d_out);
-
-
-	}
 }
 
 int parleCpu(int *in, int n,
@@ -710,13 +638,15 @@ int parleHost(int *h_in, int n,
 	CUDA_CHECK(cudaMemcpy(d_in, h_in, n*sizeof(int), cudaMemcpyHostToDevice));
 
 
-	// RUN.
+	// RUN.	
 	parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns, useChag);
 
 	// MEMCPY
 	CUDA_CHECK(cudaMemcpy(h_symbolsOut, d_symbolsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(h_countsOut, d_countsOut, n*sizeof(int), cudaMemcpyDeviceToHost));
 	CUDA_CHECK(cudaMemcpy(&h_totalRuns, d_totalRuns, sizeof(int), cudaMemcpyDeviceToHost));
+
+	//printf("total runs: %d\n", h_totalRuns);
 
 	// FREE
 	CUDA_CHECK(cudaFree(d_in));
@@ -728,6 +658,7 @@ int parleHost(int *h_in, int n,
 
 }
 
+
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
@@ -737,20 +668,14 @@ void parleDevice(int *d_in, int n,
 
 	int* d_backwardMask;
 	int* d_scannedBackwardMask;
-	int* d_scannedForwardMask;
-	int* d_forwardMask;
-	int* d_plus;
-	int* d_minus;
+	int* d_compactedBackwardMask;
 
 	// allocate resources on device. 
 	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_forwardMask, n * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedForwardMask, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_minus, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_plus, n * sizeof(int)));
-
-
+	CUDA_CHECK(cudaMalloc((void**)&d_compactedBackwardMask, (n+1) * sizeof(int)));
+	
+	
 	/*
 	const int BLOCK_SIZE = 256;
 	hemi::ExecutionPolicy ep;
@@ -758,57 +683,37 @@ void parleDevice(int *d_in, int n,
 	ep.setSharedMemBytes((BLOCK_SIZE + 2)*sizeof(int));
 
 
-	// get forward and backward mask. 
+	// get forward and backward mask.
 	hemi::cudaLaunch(ep, maskKernel, d_in, d_backwardMask, d_forwardMask, n);
 	*/
-	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, d_forwardMask, n);
+	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, n);
 
-	scan(d_backwardMask, d_scannedBackwardMask, n, useChag);
-	scan(d_forwardMask, d_scannedForwardMask, n, useChag);
-
-	reduce(d_backwardMask, d_totalRuns, n, useChag);
-
-	hemi::cudaLaunch(scatterKernel, d_backwardMask, d_scannedBackwardMask,
-		d_forwardMask, d_scannedForwardMask,
-		d_in,
-		d_symbolsOut, d_countsOut, n, d_plus, d_minus);
+	scan2(d_backwardMask, d_scannedBackwardMask, n, useChag);
+	
+	hemi::cudaLaunch(compactKernel, d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
 
 
-	hemi::cudaLaunch(sumKernel, d_countsOut, n, d_plus, d_minus);
-
+	
+	hemi::cudaLaunch(scatterKernel, d_compactedBackwardMask, d_totalRuns, d_in, d_symbolsOut, d_countsOut);
+	
 	/*
 	int* h_backwardMask = new int[n];
-	int* h_forwardMask = new int[n];
 	int* h_scannedBackwardMask = new int[n];
-	int* h_scannedForwardMask = new int[n];
-	int* h_plus = new int[n];
-	int* h_minus = new int[n];
-
+	int* h_compactedBackwardMask = new int[n+1];
 	
 
 	CUDA_CHECK(cudaMemcpy(h_backwardMask, d_backwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_forwardMask, d_forwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
-
 	CUDA_CHECK(cudaMemcpy(h_scannedBackwardMask, d_scannedBackwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_scannedForwardMask, d_scannedForwardMask, n*sizeof(int), cudaMemcpyDeviceToHost));
 	
-	CUDA_CHECK(cudaMemcpy(h_plus, d_plus, n*sizeof(int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaMemcpy(h_minus, d_minus, n*sizeof(int), cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_compactedBackwardMask, d_compactedBackwardMask, (n+1)*sizeof(int), cudaMemcpyDeviceToHost));
 
-	
+
 	printf("Backward:         ");
 	PrintArray(h_backwardMask, n);
-
-	printf("Forward:          ");
-	PrintArray(h_forwardMask, n);
-
 
 	printf("Scanned Backward: ");
 	PrintArray(h_scannedBackwardMask, n);
 
-	printf("Scanned Forward:  ");
-	PrintArray(h_scannedForwardMask, n);
-	
 	//printf("h_totalRuns:      %d\n", h_totalRuns);
 
 	//printf("h_symbolsOut:     ");
@@ -817,78 +722,19 @@ void parleDevice(int *d_in, int n,
 	//printf("h_countsOut:      ");
 	//PrintArray(h_countsOut, h_totalRuns);
 
-	//printf("h_plus:     ");
-	//PrintArray(h_plus, h_totalRuns);
-
-	//printf("h_minus:      ");
-	//PrintArray(h_minus, h_totalRuns);
-	
-
-
-
+	printf("d_compactedBackwardMask:     ");
+	PrintArray(h_compactedBackwardMask, 10);
 
 
 	delete[] h_backwardMask;
-	delete[] h_forwardMask;
 	delete[] h_scannedBackwardMask;
-	delete[] h_scannedForwardMask;
-
+	delete[] h_compactedBackwardMask;
 	*/
-	
 
 	CUDA_CHECK(cudaFree(d_backwardMask));
-	CUDA_CHECK(cudaFree(d_forwardMask));
 	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
-	CUDA_CHECK(cudaFree(d_scannedForwardMask));
-
-	CUDA_CHECK(cudaFree(d_plus));
-	CUDA_CHECK(cudaFree(d_minus));
+	CUDA_CHECK(cudaFree(d_compactedBackwardMask));
 
 
 
 }
-
-/*
-// Helper function for using CUDA to add vectors in parallel.
-void scan(int *in, int* out, int n)
-{
-int *inBuffer = 0;
-int *outBuffer = 0;
-
-const unsigned int BLOCK_SIZE = 1024;
-
-
-CUDA_CHECK(cudaMalloc((void**)&inBuffer, n * sizeof(int)));
-CUDA_CHECK(cudaMalloc((void**)&outBuffer, n * sizeof(int)));
-
-CUDA_CHECK(cudaMemcpy(inBuffer, in, n * sizeof(int), cudaMemcpyHostToDevice));
-
-// warm up.
-scanKernel<<<1, n, sizeof(int)*n*2 >> >( inBuffer, outBuffer, n);
-
-
-for (int i = 0; i < 20; ++i){
-cudaDeviceSynchronize();
-sdkStartTimer(&timer);
-
-scanKernel << <1, n, sizeof(int)*n * 2 >> >(inBuffer, outBuffer, n);
-
-// Copy output vector from GPU buffer to host memory.
-cudaDeviceSynchronize();
-sdkStopTimer(&timer);
-}
-
-double reduceTime = sdkGetAverageTimerValue(&timer) * 1e-3;
-printf("average: %.4f GB/s, Time = %.5f s\n", 1.0e-9 * ( (double)  (sizeof( int)*n)/reduceTime  ), reduceTime     );
-
-
-
-CUDA_CHECK(cudaMemcpy(out, outBuffer, n * sizeof(int), cudaMemcpyDeviceToHost));
-
-CUDA_CHECK(cudaGetLastError());
-CUDA_CHECK(cudaDeviceSynchronize());
-
-cudaFree(inBuffer);
-cudaFree(outBuffer);
-}
-*/
