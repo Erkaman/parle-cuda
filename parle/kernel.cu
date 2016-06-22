@@ -521,8 +521,8 @@ int main()
 
 	
 	
-	printf("For CPU\n");
-	profileCpu(rleCpu);
+	//printf("For CPU\n");
+	//profileCpu(rleCpu);
 
 	//rintf("For GPU\n");
 	//profileCpu(rleGpu);
@@ -530,10 +530,10 @@ int main()
 
 
 	
-	printf("For GPU CHAG\n");
-	profileGpu(true, rleGpuChag);
+	//printf("For GPU CHAG\n");
+	//profileGpu(true, rleGpuChag);
 	
-	printf("For GPU CHAG\n");
+	//printf("For GPU CHAG\n");
 	//profileGpu(true, rleGpuChag);
 	
 
@@ -543,9 +543,9 @@ int main()
 	
 
 	
-	//int n = 1 << 23;
+	int n = 1 << 23;
 	// also unit test, to make sure that the compression is valid.
-	//unitTest(getRandomData(1<<23), n, rleGpuChag, true);
+	unitTest(getRandomData(1<<23), n, rleGpuChag, true);
 
 
 
@@ -701,12 +701,12 @@ void parleDevice(int *d_in, int n,
 	
 	
 	
-	const int BLOCK_SIZE = 256;
+	const int BLOCK_SIZE = 1024;
 	hemi::ExecutionPolicy ep;
 	ep.setBlockSize(BLOCK_SIZE); // TODO: compute this using occupancy API.
 	ep.setSharedMemBytes((BLOCK_SIZE + 1)*sizeof(int));
 	
-	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, n);
+	hemi::cudaLaunch(ep, maskKernel, d_in, d_backwardMask, n);
 	
 	scan2(d_backwardMask, d_scannedBackwardMask, n, useChag);
 	
