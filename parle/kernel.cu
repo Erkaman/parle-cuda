@@ -1,7 +1,3 @@
-
-
-
-
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -21,7 +17,6 @@ namespace pp = chag::pp;
 bool improved = true;
 
 const int MAX_N = 1 << 25; // max size of any array that we use.
-
 
 int* g_symbolsOut;
 int* g_countsOut;
@@ -169,6 +164,37 @@ __global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, in
 
 __global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
 
+	extern __shared__ int shared[];
+
+	const int RADIUS = 1;
+	const int BLOCK_SIZE = blockDim.x;
+
+	for (int gindex : hemi::grid_stride_range(0, n)) {
+
+		int lindex = threadIdx.x + RADIUS;
+
+		shared[lindex] = g_in[gindex];
+
+		if (threadIdx.x < RADIUS) {
+			shared[lindex - RADIUS] = g_in[gindex - RADIUS];
+		}
+
+		__syncthreads();
+
+		if (gindex == 0)
+			g_backwardMask[gindex] = 1;
+		else {
+			g_backwardMask[gindex] = (shared[lindex] != shared[lindex - 1]);
+		}
+
+	}
+}
+
+
+
+/*
+__global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
+
 	for (int i : hemi::grid_stride_range(0, n)) {
 		if (i == 0)
 			g_backwardMask[i] = 1;
@@ -178,7 +204,7 @@ __global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
 	}
 }
 
-
+*/
 
 void PrintArray(int* arr, int n){
 	for (int i = 0; i < n; ++i){
@@ -422,9 +448,6 @@ int main()
 
 	cudppCreate(&cudpp);
 
-
-
-	
 	// allocate resources on device. These arrays are used globally thoughouts the program.
 	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, MAX_N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, MAX_N * sizeof(int)));
@@ -491,7 +514,7 @@ int main()
 	//runTests(21, rleGpuChag);
 
 	//runTests(21, rleGpuCudpp);
-
+	
 	//runTests(21, rleCpu);
 
 	
@@ -501,43 +524,30 @@ int main()
 	printf("For CPU\n");
 	profileCpu(rleCpu);
 
-	//printf("For GPU\n");
+	//rintf("For GPU\n");
 	//profileCpu(rleGpu);
 
-	
-	printf("For GPU CUDPP\n");
-	profileGpu(false, rleGpuChag);
-	
-	
 
 
-	/*
+	
 	printf("For GPU CHAG\n");
 	profileGpu(true, rleGpuChag);
 	
 	printf("For GPU CHAG\n");
-	profileGpu(true, rleGpuChag);
-	*/
+	//profileGpu(true, rleGpuChag);
+	
 
 
 	//Visual Prof
 	
 	
-	/*
-	int n = 1 << 23;
 
-	int* in = getRandomData(n);
-	int* symbolsOut = new int[n];
-	int* countsOut = new int[n];
-
+	
+	//int n = 1 << 23;
 	// also unit test, to make sure that the compression is valid.
-	unitTest(in, n, rleGpuChag, true);
+	//unitTest(getRandomData(1<<23), n, rleGpuChag, true);
 
 
-	delete[] in;
-	delete[] symbolsOut;
-	delete[] countsOut;
-	*/
 
 
 	// free device arrays.
@@ -690,18 +700,14 @@ void parleDevice(int *d_in, int n,
 
 	
 	
-	/*
+	
 	const int BLOCK_SIZE = 256;
 	hemi::ExecutionPolicy ep;
 	ep.setBlockSize(BLOCK_SIZE); // TODO: compute this using occupancy API.
-	ep.setSharedMemBytes((BLOCK_SIZE + 2)*sizeof(int));
-
-
-	// get forward and backward mask.
-	hemi::cudaLaunch(ep, maskKernel, d_in, d_backwardMask, d_forwardMask, n);
-	*/
+	ep.setSharedMemBytes((BLOCK_SIZE + 1)*sizeof(int));
+	
 	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, n);
-
+	
 	scan2(d_backwardMask, d_scannedBackwardMask, n, useChag);
 	
 	hemi::cudaLaunch(compactKernel, d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
@@ -710,6 +716,8 @@ void parleDevice(int *d_in, int n,
 	
 	hemi::cudaLaunch(scatterKernel, d_compactedBackwardMask, d_totalRuns, d_in, d_symbolsOut, d_countsOut);
 	
+
+
 	/*
 	int* h_backwardMask = new int[n];
 	int* h_scannedBackwardMask = new int[n];
