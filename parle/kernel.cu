@@ -20,6 +20,31 @@ namespace pp = chag::pp;
 
 bool improved = true;
 
+const int MAX_N = 1 << 25; // max size of any array that we use.
+
+
+int* g_symbolsOut;
+int* g_countsOut;
+
+
+int* g_in;
+
+int* g_decompressed;
+
+
+// used in PARLE. 
+int* d_symbolsOut;
+int* d_countsOut;
+int* d_in;
+int* d_totalRuns;
+
+// used in parle as in-between storage arrays.
+int* d_backwardMask;
+int* d_scannedBackwardMask;
+int* d_compactedBackwardMask;
+
+
+
 const int NUM_TESTS = 10;
 const int Tests[NUM_TESTS] = {
 	10000,
@@ -171,8 +196,7 @@ bool verifyCompression(
 	int* original, int n,
 	int* compressedSymbols, int* compressedCounts, int totalRuns){
 
-	int* decompressed = new int[n];
-
+	
 
 
 	// decompress.
@@ -202,15 +226,15 @@ bool verifyCompression(
 		int count = compressedCounts[i];
 
 		for (int k = 0; k < count; ++k){
-			decompressed[j++] = symbol;
+			g_decompressed[j++] = symbol;
 		}
 	}
 
 	// verify the compression.
 	for (int i = 0; i < n; ++i) {
-		if (original[i] != decompressed[i]){
+		if (original[i] != g_decompressed[i]){
 
-			sprintf(errorString, "Decompressed and original not equal at %d, %d != %d\n", i, original[i], decompressed[i]);
+			sprintf(errorString, "Decompressed and original not equal at %d, %d != %d\n", i, original[i], g_decompressed[i]);
 			return false;
 		}
 	}
@@ -228,19 +252,18 @@ bool verifyCompression(
 
 int* getRandomData(int n){
 
-	int* in = new int[n];
 
 	int val = rand() % 10;
 
 	for (int i = 0; i < n; ++i) {
-		in[i] = val;
+		g_in[i] = val;
 
 		if (rand() % 6 == 0){
 			val = rand() % 10;
 		}
 	}
 
-	return in;
+	return g_in;
 }
 
 
@@ -248,10 +271,8 @@ template<typename F>
 void unitTest(int* in, int n, F rle, bool verbose)
 {
 
-	int* symbolsOut = new int[n];
-	int* countsOut = new int[n];
-
-	int totalRuns = rle(in, n, symbolsOut, countsOut);
+	
+	int totalRuns = rle(in, n, g_symbolsOut, g_countsOut);
 		//parleHost(in, n, symbolsOut, countsOut); // 1<<8
 
 	if (verbose) {
@@ -262,7 +283,7 @@ void unitTest(int* in, int n, F rle, bool verbose)
 
 	if (!verifyCompression(
 		in, n,
-		symbolsOut, countsOut, totalRuns)) {
+		g_symbolsOut, g_countsOut, totalRuns)) {
 		printf("Failed test %s\n", errorString);
 		PrintArray(in, n);
 
@@ -273,8 +294,6 @@ void unitTest(int* in, int n, F rle, bool verbose)
 			printf("passed test!\n\n");
 	}
 
-	delete[] symbolsOut;
-	delete[] countsOut;
 }
 
 
@@ -287,15 +306,13 @@ void profileCpu(F rle) {
 		int n = Tests[i];
 		
 		int* in = getRandomData(n);
-		int* symbolsOut = new int[n];
-		int* countsOut = new int[n];
-
+		
 
 		for (int i = 0; i < TRIALS; ++i) {	
 
 			sdkStartTimer(&timer);
 
-			rle(in, n, symbolsOut, countsOut);
+			rle(in, n, g_symbolsOut, g_countsOut);
 
 			sdkStopTimer(&timer);
 
@@ -308,9 +325,6 @@ void profileCpu(F rle) {
 		printf("For n = %d, in time %.5f\n", n, sdkGetAverageTimerValue(&timer)*1e-3);
 		
 
-		delete[] in;
-		delete[] symbolsOut;
-		delete[] countsOut;
 
 	}
 
@@ -331,25 +345,14 @@ void profileGpu(bool useChag, F f) {
 		int n = Tests[i];
 
 		int* in = getRandomData(n);
-		int* symbolsOut = new int[n];
-		int* countsOut = new int[n];
+		
 
 
 
-
-		int* d_symbolsOut;
-		int* d_countsOut;
-		int* d_in;
-		int* d_totalRuns;
-
+		
 		int h_totalRuns;
 
 
-		// MALLOC
-		CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(int)));
-		CUDA_CHECK(cudaMalloc((void**)&d_countsOut, n * sizeof(int)));
-		CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, n * sizeof(int)));
-		CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
 
 		// transer input data to device.
 		CUDA_CHECK(cudaMemcpy(d_in, in, n*sizeof(int), cudaMemcpyHostToDevice));
@@ -368,12 +371,7 @@ void profileGpu(bool useChag, F f) {
 		cudaEventRecord(stop);
 		cudaDeviceSynchronize();
 
-		// FREE
-		CUDA_CHECK(cudaFree(d_in));
-		CUDA_CHECK(cudaFree(d_countsOut));
-		CUDA_CHECK(cudaFree(d_symbolsOut));
-		CUDA_CHECK(cudaFree(d_totalRuns));
-
+		
 		// also unit test, to make sure that the compression is valid.
 		unitTest(in, n, f, false);
 
@@ -381,10 +379,6 @@ void profileGpu(bool useChag, F f) {
 		cudaEventElapsedTime(&ms, start, stop);
 		printf("For n = %d, in time %.5f\n", n, (ms/((float)TRIALS ) ) /1000.0f);
 
-
-		delete[] in;
-		delete[] symbolsOut;
-		delete[] countsOut;
 
 	}
 
@@ -412,7 +406,6 @@ void runTests(int a, F rle) {
 
 			unitTest(in, n, rle, true);
 
-			delete[] in;
 		}
 
 		printf("-------------------------------\n\n");
@@ -428,6 +421,29 @@ int main()
 
 
 	cudppCreate(&cudpp);
+
+
+
+	
+	// allocate resources on device. These arrays are used globally thoughouts the program.
+	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, MAX_N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, MAX_N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_compactedBackwardMask, (MAX_N+ 1) * sizeof(int)));
+
+	// MALLOC
+	CUDA_CHECK(cudaMalloc((void**)&d_in, MAX_N* sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, MAX_N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, MAX_N * sizeof(int)));
+	CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
+
+
+	g_in = new int[MAX_N];
+	g_decompressed = new int[MAX_N];
+
+	g_symbolsOut = new int[MAX_N];
+	g_countsOut = new int[MAX_N];
+
+
 
 	auto rleGpuCudpp = [](int *in, int n,
 		int* symbolsOut,
@@ -474,22 +490,25 @@ int main()
 	// uni tests
 	//runTests(21, rleGpuChag);
 
-	runTests(21, rleGpuCudpp);
+	//runTests(21, rleGpuCudpp);
+
+	//runTests(21, rleCpu);
 
 	
-	/*
+
+	
+	
 	printf("For CPU\n");
 	profileCpu(rleCpu);
 
 	//printf("For GPU\n");
 	//profileCpu(rleGpu);
-	
 
 	
 	printf("For GPU CUDPP\n");
 	profileGpu(false, rleGpuChag);
 	
-	*/
+	
 
 
 	/*
@@ -521,8 +540,27 @@ int main()
 	*/
 
 
+	// free device arrays.
+	CUDA_CHECK(cudaFree(d_backwardMask));
+	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
+	CUDA_CHECK(cudaFree(d_compactedBackwardMask));
+
+	// FREE
+	CUDA_CHECK(cudaFree(d_in));
+	CUDA_CHECK(cudaFree(d_countsOut));
+	CUDA_CHECK(cudaFree(d_symbolsOut));
+	CUDA_CHECK(cudaFree(d_totalRuns));
+
 
 	CUDA_CHECK(cudaDeviceReset());
+
+	// free global memory.
+	delete[] g_in;
+	delete[] g_decompressed;
+
+	delete[] g_symbolsOut;
+	delete[] g_countsOut;
+
 
 
 	printf("DONE\n");
@@ -612,11 +650,6 @@ int parleHost(int *h_in, int n,
 	int* h_countsOut,
 	bool useChag){
 
-	int* d_symbolsOut;
-	int* d_countsOut;
-	int* d_in;
-	int* d_totalRuns;
-
 	int h_totalRuns;
 
 	
@@ -628,12 +661,7 @@ int parleHost(int *h_in, int n,
 	PrintArray(h_in, n);
 	*/
 
-	// MALLOC
-	CUDA_CHECK(cudaMalloc((void**)&d_in, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
-
+	
 	// transer input data to device.
 	CUDA_CHECK(cudaMemcpy(d_in, h_in, n*sizeof(int), cudaMemcpyHostToDevice));
 
@@ -648,12 +676,6 @@ int parleHost(int *h_in, int n,
 
 	//printf("total runs: %d\n", h_totalRuns);
 
-	// FREE
-	CUDA_CHECK(cudaFree(d_in));
-	CUDA_CHECK(cudaFree(d_countsOut));
-	CUDA_CHECK(cudaFree(d_symbolsOut));
-	CUDA_CHECK(cudaFree(d_totalRuns));
-
 	return h_totalRuns;
 
 }
@@ -666,14 +688,6 @@ void parleDevice(int *d_in, int n,
 	bool useChag
 	){
 
-	int* d_backwardMask;
-	int* d_scannedBackwardMask;
-	int* d_compactedBackwardMask;
-
-	// allocate resources on device. 
-	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, n * sizeof(int)));
-	CUDA_CHECK(cudaMalloc((void**)&d_compactedBackwardMask, (n+1) * sizeof(int)));
 	
 	
 	/*
@@ -731,10 +745,19 @@ void parleDevice(int *d_in, int n,
 	delete[] h_compactedBackwardMask;
 	*/
 
-	CUDA_CHECK(cudaFree(d_backwardMask));
-	CUDA_CHECK(cudaFree(d_scannedBackwardMask));
-	CUDA_CHECK(cudaFree(d_compactedBackwardMask));
-
+	
 
 
 }
+
+
+/*
+todo:
+organize the threadblocks so that we have coalesced read and writes.
+
+think about occupancy. 
+
+check the thoughput of a simple copy kernel in nvpp.
+
+shrink thread blocks, to decrease waiting time at syncthreads. ug
+*/
