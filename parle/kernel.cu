@@ -39,6 +39,9 @@ int* d_scannedBackwardMask;
 int* d_compactedBackwardMask;
 
 
+CUDPPHandle scanPlan = 0;
+
+
 
 const int NUM_TESTS = 10;
 const int Tests[NUM_TESTS] = {
@@ -181,10 +184,14 @@ __global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
 
 		__syncthreads();
 
-		if (gindex == 0)
+		if (gindex == 0) {
 			g_backwardMask[gindex] = 1;
-		else {
-			g_backwardMask[gindex] = (shared[lindex] != shared[lindex - 1]);
+		} else {
+
+			int a = shared[lindex];
+			int b = shared[lindex-1];
+
+			g_backwardMask[gindex] = (a != b);
 		}
 
 	}
@@ -447,6 +454,22 @@ int main()
 
 
 	cudppCreate(&cudpp);
+	//
+	// allocate scan plan.
+	//
+	CUDPPConfiguration config;
+	config.op = CUDPP_ADD;
+	config.datatype = CUDPP_INT;
+	config.algorithm = CUDPP_SCAN;
+	config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_INCLUSIVE;
+
+	CUDPPResult res = cudppPlan(cudpp, &scanPlan, config, MAX_N, 1, 0);
+
+	if (CUDPP_SUCCESS != res){
+		printf("Error creating CUDPPPlan for scan2!\n");
+		exit(-1);
+	}
+
 
 	// allocate resources on device. These arrays are used globally thoughouts the program.
 	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, MAX_N * sizeof(int)));
@@ -533,8 +556,8 @@ int main()
 	//printf("For GPU CHAG\n");
 	//profileGpu(true, rleGpuChag);
 	
-	//printf("For GPU CHAG\n");
-	//profileGpu(true, rleGpuChag);
+//printf("For GPU CHAG\n");
+//	profileGpu(true, rleGpuChag);
 	
 
 
@@ -562,6 +585,16 @@ int main()
 	CUDA_CHECK(cudaFree(d_totalRuns));
 
 
+
+
+	res = cudppDestroyPlan(scanPlan);
+	if (CUDPP_SUCCESS != res)
+	{
+		printf("Error destroying CUDPPPlan for scan2\n");
+		exit(-1);
+	}
+	cudppDestroy(cudpp);
+
 	CUDA_CHECK(cudaDeviceReset());
 
 	// free global memory.
@@ -575,39 +608,22 @@ int main()
 
 	printf("DONE\n");
 
-	cudppDestroy(cudpp);
+
+
 
 	return 0;
 }
 
 void scan2(int* d_in, int* d_out, int N, bool useChag) {
 
-		CUDPPConfiguration config;
-		config.op = CUDPP_ADD;
-		config.datatype = CUDPP_INT;
-		config.algorithm = CUDPP_SCAN;
-		config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_INCLUSIVE;
 
-		CUDPPHandle plan = 0;
-		CUDPPResult res = cudppPlan(cudpp, &plan, config, N, 1, 0);
 
-		if (CUDPP_SUCCESS != res){
-			printf("Error creating CUDPPPlan for scan2!\n");
-			exit(-1);
-		}
-
-		res = cudppScan(plan, d_out, d_in, N);
+	CUDPPResult res = cudppScan(scanPlan, d_out, d_in, N);
 		if (CUDPP_SUCCESS != res){
 			printf("Error in cudppScan2()\n");
 			exit(-1);
 		}
 
-		res = cudppDestroyPlan(plan);
-		if (CUDPP_SUCCESS != res)
-		{
-			printf("Error destroying CUDPPPlan for scan2\n");
-			exit(-1);
-		}
 
 
 }
@@ -758,14 +774,4 @@ void parleDevice(int *d_in, int n,
 
 }
 
-
-/*
-todo:
-organize the threadblocks so that we have coalesced read and writes.
-
-think about occupancy. 
-
-check the thoughput of a simple copy kernel in nvpp.
-
-shrink thread blocks, to decrease waiting time at syncthreads. ug
-*/
+//next thing to try: make sure that scatter and compact kernel does not launch that many threads!
