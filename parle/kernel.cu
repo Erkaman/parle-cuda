@@ -12,31 +12,22 @@
 
 namespace pp = chag::pp;
 
-bool improved = true;
-
-const int MAX_N = 1 << 25; // max size of any array that we use.
-
+// global host memory arrays.
 int* g_symbolsOut;
 int* g_countsOut;
-
-
 int* g_in;
-
 int* g_decompressed;
 
-
-// used in PARLE. 
+// Device memory used in PARLE
 int* d_symbolsOut;
 int* d_countsOut;
 int* d_in;
 int* d_totalRuns;
-
-// used in parle as in-between storage arrays.
 int* d_backwardMask;
 int* d_scannedBackwardMask;
 int* d_compactedBackwardMask;
 
-const int NUM_TESTS = 10;
+const int NUM_TESTS = 11;
 const int Tests[NUM_TESTS] = {
 	10000,
 	50000, 
@@ -48,10 +39,11 @@ const int Tests[NUM_TESTS] = {
 	5000000,
 	10000000,
 	20000000,
-
+	40000000,
 };
 
-const int TRIALS = 100;
+const int PROFILING_TESTS = 100;
+const int MAX_N = 1 << 26; // max size of any array that we use.
 
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
@@ -59,12 +51,11 @@ void parleDevice(int *d_in, int n,
 	int* d_totalRuns
 	);
 
-
 int parleHost(int *h_in, int n,
 	int* h_symbolsOut,
 	int* h_countsOut);
 
-int parleCpu(int *in, int n,
+int rleCpu(int *in, int n,
 	int* symbolsOut,
 	int* countsOut);
 
@@ -80,30 +71,24 @@ __global__ void compactKernel(int* g_in, int* g_scannedBackwardMask, int* g_comp
 			g_compactedBackwardMask[0] = 0;
 		}
 		else if (g_scannedBackwardMask[i] != g_scannedBackwardMask[i-1]) {
-
 			g_compactedBackwardMask[g_scannedBackwardMask[i] - 1] = i;
-
 		}
 	}
 }
 
 __global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, int* g_in, int* g_symbolsOut, int* g_countsOut) {
-
 	int n = *g_totalRuns;
 
 	for (int i : hemi::grid_stride_range(0, n)) {
-
 		int a = g_compactedBackwardMask[i];
 		int b = g_compactedBackwardMask[i+1];
 
 		g_symbolsOut[i] = g_in[a];
 		g_countsOut[i] = b-a;
 	}
-
 }
 
 __global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
-
 	for (int i : hemi::grid_stride_range(0, n)) {
 		if (i == 0)
 			g_backwardMask[i] = 1;
@@ -143,7 +128,6 @@ bool verifyCompression(
 
 			printf("%d, %d\n", count, symbol);
 		}
-
 		return false;
 	}
 
@@ -179,11 +163,10 @@ int* getRandomData(int n){
 			val = rand() % 10;
 		}
 	}
-
 	return g_in;
 }
 
-// use F to RLE compresss the data, and then verify the compression. 
+// use f to RLE compresss the data, and then verify the compression. 
 template<typename F>
 void unitTest(int* in, int n, F f, bool verbose)
 {
@@ -209,13 +192,14 @@ void unitTest(int* in, int n, F f, bool verbose)
 	}
 }
 
+// profile some RLE implementation on the CPU.
 template<typename F>
 void profileCpu(F rle) {
 	for (int i = 0; i < NUM_TESTS; ++i) {
 		int n = Tests[i];
 		int* in = getRandomData(n);
 		
-		for (int i = 0; i < TRIALS; ++i) {	
+		for (int i = 0; i < PROFILING_TESTS; ++i) {
 			sdkStartTimer(&timer);
 			rle(in, n, g_symbolsOut, g_countsOut);
 			sdkStopTimer(&timer);
@@ -228,6 +212,7 @@ void profileCpu(F rle) {
 	}
 }
 
+// profile some RLE implementation on the GPU.
 template<typename F>
 void profileGpu(F f) {
 
@@ -246,7 +231,7 @@ void profileGpu(F f) {
 
 		// record.
 		cudaEventRecord(start);
-		for (int i = 0; i < TRIALS; ++i) {
+		for (int i = 0; i < PROFILING_TESTS; ++i) {
 			parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
 		}
 		cudaEventRecord(stop);
@@ -261,14 +246,13 @@ void profileGpu(F f) {
 	}
 }
 
+// Run many unit tests on an implementation(f) of RLE.
 template<typename F>
-void runTests(int a, F rle) {
+void runTests(int a, F f) {
 	printf("START UNIT TESTS\n");
 
 	for (int i = 4; i < a; ++i) {
-
 		for (int k = 0; k < 30; ++k) {
-
 			int n = 2 << i;
 
 			if (k != 0) {
@@ -279,9 +263,8 @@ void runTests(int a, F rle) {
 
 			int* in = getRandomData(n);
 
-			unitTest(in, n, rle, true);
+			unitTest(in, n, f, true);
 		}
-
 		printf("-------------------------------\n\n");
 	}
 }
@@ -305,45 +288,28 @@ int main(){
 	// allocate resources on the host. 
 	g_in = new int[MAX_N];
 	g_decompressed = new int[MAX_N];
-
 	g_symbolsOut = new int[MAX_N];
 	g_countsOut = new int[MAX_N];
 
-	auto rleGpu = [](int *in, int n,
-		int* symbolsOut,
-		int* countsOut){
-		return parleHost(in, n, symbolsOut, countsOut);
-	};
+	// We run this code to run many unit tests on the code
+	/*
+	runTests(21, rleCpu);
+	runTests(21, parleHost);
+	*/
+
+	// We run this code to profile the performance. 
+	printf("profile CPU\n");
+	profileCpu(rleCpu);
+
+	printf("profile GPU\n");
+	profileCpu(parleHost);
 	
-	auto rleCpu = [](int *in, int n,
-		int* symbolsOut,
-		int* countsOut){
-		return parleCpu(in, n, symbolsOut, countsOut);
-	};
-
-
-	// uni tests
-	//runTests(21, rleGpu);
-	//runTests(21, rleCpu);
-
-	//printf("profile CPU\n");
-	//profileCpu(rleCpu);
-
-	//printf("profile GPU\n");
-	//profileCpu(rleGpu);
-
-	//printf("For GPU CHAG\n");
-	//profileGpu(true, rleGpuChag);
 	
-//printf("For GPU CHAG\n");
-//	profileGpu(true, rleGpuChag);
-	
-
-
-	//Visual Prof
-	//int n = 1 << 23;
-	// also unit test, to make sure that the compression is valid.
-	//unitTest(getRandomData(1<<23), n, rleGpu, true);
+	// We run this code when we wish to run NVPP on the algorithm. 
+	/*
+	int n = 1 << 23;
+    unitTest(getRandomData(1<<23), n, rleGpu, true);
+	*/
 
 	// free device arrays.
 	CUDA_CHECK(cudaFree(d_backwardMask));
@@ -366,13 +332,10 @@ int main(){
 	return 0;
 }
 
-void scan(int* d_in, int* d_out, int N) {
-	pp::prefix_inclusive(d_in, d_in + N, d_out);
-}
 
-int parleCpu(int *in, int n,
-	int* symbolsOut,
-	int* countsOut){
+
+// implementation of RLE on CPU.
+int rleCpu(int *in, int n, int* symbolsOut, int* countsOut){
 
 	if (n == 0)
 		return 0; // nothing to compress!
@@ -382,10 +345,8 @@ int parleCpu(int *in, int n,
 	int count = 1;
 
 	for (int i = 1; i < n; ++i) {
-
 		if (in[i] != symbol) {
 			// run is over.
-
 			// So output run.
 			symbolsOut[outIndex] = symbol;
 			countsOut[outIndex] = count;
@@ -396,19 +357,16 @@ int parleCpu(int *in, int n,
 			count = 1;
 		}
 		else {
-			// run is not over yet.
-			++count;
+			++count; // run is not over yet.
 		}
 	}
 
-	if (count > 0) {
-		// output last run. 
-		symbolsOut[outIndex] = symbol;
-		countsOut[outIndex] = count;
-	}
+	// output last run. 
+	symbolsOut[outIndex] = symbol;	
+	countsOut[outIndex] = count;
+	outIndex++;
 
-	return outIndex+1;
-
+	return outIndex;
 }
 
 // On the CPU do preparation to run parle, launch PARLE on GPU, and then transfer the result data to the CPU. 
@@ -432,13 +390,16 @@ int parleHost(int *h_in, int n,
 	return h_totalRuns;
 }
 
+void scan(int* d_in, int* d_out, int N) {
+	pp::prefix_inclusive(d_in, d_in + N, d_out);
+}
+
 // run parle on the GPU
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
 	int* d_totalRuns
 	){
-
 	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, n);
 	scan(d_backwardMask, d_scannedBackwardMask, n);
 	hemi::cudaLaunch(compactKernel, d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
