@@ -4,8 +4,6 @@
 #include "helper_timer.h"
 #include "helper_cuda.h"
 
-#include "cudpp.h"
-
 #include "hemi/grid_stride_range.h"
 #include "hemi/launch.h"
 
@@ -38,11 +36,6 @@ int* d_backwardMask;
 int* d_scannedBackwardMask;
 int* d_compactedBackwardMask;
 
-
-CUDPPHandle scanPlan = 0;
-
-
-
 const int NUM_TESTS = 10;
 const int Tests[NUM_TESTS] = {
 	10000,
@@ -60,10 +53,6 @@ const int Tests[NUM_TESTS] = {
 
 const int TRIALS = 100;
 
-
-CUDPPHandle cudpp;
-
-
 void parleDevice(int *d_in, int n,
 	int* d_symbolsOut,
 	int* d_countsOut,
@@ -80,19 +69,11 @@ int parleCpu(int *in, int n,
 	int* countsOut);
 
 __global__ void compactKernel(int* g_in, int* g_scannedBackwardMask, int* g_compactedBackwardMask, int* g_totalRuns, int n) {
-
-
 	for (int i : hemi::grid_stride_range(0, n)) {
 
 		if (i == (n - 1)) {
 			g_compactedBackwardMask[g_scannedBackwardMask[i] + 0] = i + 1;
-
-		//	printf("total runs in kernel %d\n", g_scannedBackwardMask[i]);
-
 			*g_totalRuns = g_scannedBackwardMask[i];
-
-		//	printf("total runs in kernel %d\n", *g_totalRuns);
-
 		}
 
 		if (i == 0) {
@@ -103,10 +84,8 @@ __global__ void compactKernel(int* g_in, int* g_scannedBackwardMask, int* g_comp
 			g_compactedBackwardMask[g_scannedBackwardMask[i] - 1] = i;
 
 		}
-
 	}
 }
-
 
 __global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, int* g_in, int* g_symbolsOut, int* g_countsOut) {
 
@@ -206,11 +185,10 @@ int* getRandomData(int n){
 
 // use F to RLE compresss the data, and then verify the compression. 
 template<typename F>
-void unitTest(int* in, int n, F rle, bool verbose)
+void unitTest(int* in, int n, F f, bool verbose)
 {
-	int totalRuns = rle(in, n, g_symbolsOut, g_countsOut);
-		//parleHost(in, n, symbolsOut, countsOut); // 1<<8
-
+	int totalRuns = f(in, n, g_symbolsOut, g_countsOut);
+	
 	if (verbose) {
 		printf("n = %d\n", n);
 		printf("Original Size  : %d\n", n);
@@ -314,21 +292,6 @@ int main(){
 	srand(1000);
 	CUDA_CHECK(cudaSetDevice(0));
 
-	cudppCreate(&cudpp);
-	//
-	// allocate scan plan.
-	//
-	CUDPPConfiguration config;
-	config.op = CUDPP_ADD;
-	config.datatype = CUDPP_INT;
-	config.algorithm = CUDPP_SCAN;
-	config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_INCLUSIVE;
-	CUDPPResult res = cudppPlan(cudpp, &scanPlan, config, MAX_N, 1, 0);
-	if (CUDPP_SUCCESS != res){
-		printf("Error creating CUDPPPlan for scan2!\n");
-		exit(-1);
-	}
-
 	// allocate resources on device. These arrays are used globally thoughouts the program.
 	CUDA_CHECK(cudaMalloc((void**)&d_backwardMask, MAX_N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_scannedBackwardMask, MAX_N * sizeof(int)));
@@ -363,11 +326,11 @@ int main(){
 	//runTests(21, rleGpu);
 	//runTests(21, rleCpu);
 
-	printf("profile CPU\n");
-	profileCpu(rleCpu);
+	//printf("profile CPU\n");
+	//profileCpu(rleCpu);
 
-	printf("profile GPU\n");
-	profileCpu(rleGpu);
+	//printf("profile GPU\n");
+	//profileCpu(rleGpu);
 
 	//printf("For GPU CHAG\n");
 	//profileGpu(true, rleGpuChag);
@@ -378,9 +341,9 @@ int main(){
 
 
 	//Visual Prof
-	int n = 1 << 23;
+	//int n = 1 << 23;
 	// also unit test, to make sure that the compression is valid.
-	unitTest(getRandomData(1<<23), n, rleGpu, true);
+	//unitTest(getRandomData(1<<23), n, rleGpu, true);
 
 	// free device arrays.
 	CUDA_CHECK(cudaFree(d_backwardMask));
@@ -390,14 +353,6 @@ int main(){
 	CUDA_CHECK(cudaFree(d_countsOut));
 	CUDA_CHECK(cudaFree(d_symbolsOut));
 	CUDA_CHECK(cudaFree(d_totalRuns));
-
-	// cudpp free.
-	res = cudppDestroyPlan(scanPlan);
-	if (CUDPP_SUCCESS != res){
-		printf("Error destroying CUDPPPlan for scan2\n");
-		exit(-1);
-	}
-	cudppDestroy(cudpp);
 
 	CUDA_CHECK(cudaDeviceReset());
 
@@ -411,12 +366,8 @@ int main(){
 	return 0;
 }
 
-void scan2(int* d_in, int* d_out, int N) {
-	CUDPPResult res = cudppScan(scanPlan, d_out, d_in, N);
-		if (CUDPP_SUCCESS != res){
-			printf("Error in cudppScan2()\n");
-			exit(-1);
-		}
+void scan(int* d_in, int* d_out, int N) {
+	pp::prefix_inclusive(d_in, d_in + N, d_out);
 }
 
 int parleCpu(int *in, int n,
@@ -489,7 +440,7 @@ void parleDevice(int *d_in, int n,
 	){
 
 	hemi::cudaLaunch(maskKernel, d_in, d_backwardMask, n);
-	scan2(d_backwardMask, d_scannedBackwardMask, n);
+	scan(d_backwardMask, d_scannedBackwardMask, n);
 	hemi::cudaLaunch(compactKernel, d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
 	hemi::cudaLaunch(scatterKernel, d_compactedBackwardMask, d_totalRuns, d_in, d_symbolsOut, d_countsOut);
 }
