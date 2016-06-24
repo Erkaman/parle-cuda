@@ -19,17 +19,11 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="cudpp.h" />
-    <ClInclude Include="cudpp_config.h" />
-    <ClInclude Include="cudpp_hash.h" />
     <ClInclude Include="helper_cuda.h" />
     <ClInclude Include="helper_timer.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="kernel.cu" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="cudpp_config.h.in" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{63D4B172-6C05-47F1-A05E-07C37FD4BD6B}</ProjectGuid>

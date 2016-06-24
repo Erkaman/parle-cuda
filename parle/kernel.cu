@@ -216,16 +216,15 @@ void profileCpu(F rle, G dataGen) {
 		int n = Tests[i];
 		int* in = dataGen(n);
 		
+		StartCounter();
+		
 		for (int i = 0; i < PROFILING_TESTS; ++i) {
-			sdkStartTimer(&timer);
 			rle(in, n, g_symbolsOut, g_countsOut);
-			sdkStopTimer(&timer);
 		}
-
+		printf("For n = %d, in time %.5f\n", n, (GetCounter() / ((float)PROFILING_TESTS)) / 1000.0f);
+		
 		// also unit test, to make sure that the compression is valid.
 		unitTest(in, n, rle, false);
-
-		printf("For n = %d, in time %.5f\n", n, sdkGetAverageTimerValue(&timer)*1e-3);
 	}
 }
 
@@ -241,8 +240,7 @@ void profileGpu(F rle, G dataGen) {
 
 		int n = Tests[i];
 		int* in = dataGen(n);
-		int h_totalRuns;
-
+		
 		// transer input data to device.
 		CUDA_CHECK(cudaMemcpy(d_in, in, n*sizeof(int), cudaMemcpyHostToDevice));
 
@@ -255,11 +253,11 @@ void profileGpu(F rle, G dataGen) {
 		cudaDeviceSynchronize();
 
 		// also unit test, to make sure that the compression is valid.
-		unitTest(in, n, f, false);
+		unitTest(in, n, rle, false);
 
 		float ms;
 		cudaEventElapsedTime(&ms, start, stop);
-		printf("For n = %d, in time %.5f\n", n, (ms/((float)TRIALS ) ) /1000.0f);
+		printf("For n = %d, in time %.5f\n", n, (ms / ((float)PROFILING_TESTS)) / 1000.0f);
 	}
 }
 
@@ -288,7 +286,6 @@ void runTests(int a, F f) {
 
 int main(){
 
-	sdkCreateTimer(&timer);
 	srand(1000);
 	CUDA_CHECK(cudaSetDevice(0));
 
@@ -301,6 +298,12 @@ int main(){
 	CUDA_CHECK(cudaMalloc((void**)&d_countsOut, MAX_N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, MAX_N * sizeof(int)));
 	CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
+
+	/*
+	StartCounter();
+	Sleep(1000);
+	printf("out: %f\n", GetCounter()/1000);
+	*/
 
 	// allocate resources on the host. 
 	g_in = new int[MAX_N];
@@ -319,11 +322,11 @@ int main(){
 	printf("profile CPU\n");
 	profileCpu(rleCpu, generateRandomData);
 
-	printf("profile1 GPU\n");
-	profileCpu(parleHost, generateRandomData);
+	printf("profile random GPU\n");
+	profileGpu(parleHost, generateRandomData);
 	
-	printf("profile2 GPU\n");
-	profileCpu(parleHost, generateCompressibleRandomData);
+	printf("profile compressible GPU\n");
+	profileGpu(parleHost, generateCompressibleRandomData);
 
 	
 	
@@ -427,3 +430,5 @@ void parleDevice(int *d_in, int n,
 	hemi::cudaLaunch(compactKernel, d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
 	hemi::cudaLaunch(scatterKernel, d_compactedBackwardMask, d_totalRuns, d_in, d_symbolsOut, d_countsOut);
 }
+
+

@@ -25,6 +25,3 @@ void CheckCudaError(cudaError ret, const char* stmt, const char* filename, int l
 #else
 #define CUDA_CHECK(stmt) stmt
 #endif
-
-
-StopWatchInterface* timer;
