@@ -153,7 +153,10 @@ bool verifyCompression(
 }
 
 // get random test data for compression.
-int* getRandomData(int n){
+// the kind of data generated is like
+// 1,1,1,1,4,4,4,4,7,7,7,7,....
+// so there's lots of repeated sequences. 
+int* generateCompressibleRandomData(int n){
 	int val = rand() % 10;
 
 	for (int i = 0; i < n; ++i) {
@@ -165,6 +168,20 @@ int* getRandomData(int n){
 	}
 	return g_in;
 }
+
+
+// get random test data for compression.
+// the kind of data generated is like
+// 1,5,8,4,2,6,....
+// so it's completely random.
+int* generateRandomData(int n){
+	for (int i = 0; i < n; ++i) {
+		g_in[i] = rand() % 10;;
+
+	}
+	return g_in;
+}
+
 
 // use f to RLE compresss the data, and then verify the compression. 
 template<typename F>
@@ -193,11 +210,11 @@ void unitTest(int* in, int n, F f, bool verbose)
 }
 
 // profile some RLE implementation on the CPU.
-template<typename F>
-void profileCpu(F rle) {
+template<typename F, typename G>
+void profileCpu(F rle, G dataGen) {
 	for (int i = 0; i < NUM_TESTS; ++i) {
 		int n = Tests[i];
-		int* in = getRandomData(n);
+		int* in = dataGen(n);
 		
 		for (int i = 0; i < PROFILING_TESTS; ++i) {
 			sdkStartTimer(&timer);
@@ -213,8 +230,8 @@ void profileCpu(F rle) {
 }
 
 // profile some RLE implementation on the GPU.
-template<typename F>
-void profileGpu(F f) {
+template<typename F, typename G>
+void profileGpu(F rle, G dataGen) {
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -223,7 +240,7 @@ void profileGpu(F f) {
 	for (int i = 0; i < NUM_TESTS; ++i) {
 
 		int n = Tests[i];
-		int* in = getRandomData(n);
+		int* in = dataGen(n);
 		int h_totalRuns;
 
 		// transer input data to device.
@@ -261,7 +278,7 @@ void runTests(int a, F f) {
 				n = (int)(n * (0.6f + 1.3f * (rand() / (float)RAND_MAX)));
 			}
 
-			int* in = getRandomData(n);
+			int* in = generateCompressibleRandomData(n);
 
 			unitTest(in, n, f, true);
 		}
@@ -298,17 +315,22 @@ int main(){
 	*/
 
 	// We run this code to profile the performance. 
+	
 	printf("profile CPU\n");
-	profileCpu(rleCpu);
+	profileCpu(rleCpu, generateRandomData);
 
-	printf("profile GPU\n");
-	profileCpu(parleHost);
+	printf("profile1 GPU\n");
+	profileCpu(parleHost, generateRandomData);
+	
+	printf("profile2 GPU\n");
+	profileCpu(parleHost, generateCompressibleRandomData);
+
 	
 	
 	// We run this code when we wish to run NVPP on the algorithm. 
 	/*
 	int n = 1 << 23;
-    unitTest(getRandomData(1<<23), n, rleGpu, true);
+    unitTest(generateCompressibleRandomData(1<<23), n, rleGpu, true);
 	*/
 
 	// free device arrays.
