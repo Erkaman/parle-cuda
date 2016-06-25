@@ -8,11 +8,11 @@
 
 void CheckCudaError(cudaError ret, const char* stmt, const char* filename, int line)
 {
-	if (ret != cudaSuccess)
-	{
-		printf("CL error: \"%s\",at %s:%i\nfor statement\n\"%s\"\n", cudaGetErrorString(ret), filename, line, stmt);
-		exit(1);
-	}
+    if (ret != cudaSuccess)
+    {
+        printf("CL error: \"%s\",at %s:%i\nfor statement\n\"%s\"\n", cudaGetErrorString(ret), filename, line, stmt);
+        exit(1);
+    }
 }
 #define _DEBUG
 

@@ -9,20 +9,20 @@ __int64 CounterStart = 0;
 
 void StartCounter()
 {
-	LARGE_INTEGER li;
-	if (!QueryPerformanceFrequency(&li))
-		printf("QueryPerformanceFrequency failed!\n");
+    LARGE_INTEGER li;
+    if (!QueryPerformanceFrequency(&li))
+        printf("QueryPerformanceFrequency failed!\n");
 
-	PCFreq = double(li.QuadPart) / 1000.0;
+    PCFreq = double(li.QuadPart) / 1000.0;
 
-	QueryPerformanceCounter(&li);
-	CounterStart = li.QuadPart;
+    QueryPerformanceCounter(&li);
+    CounterStart = li.QuadPart;
 }
 double GetCounter()
 {
-	LARGE_INTEGER li;
-	QueryPerformanceCounter(&li);
-	return double(li.QuadPart - CounterStart) / PCFreq;
+    LARGE_INTEGER li;
+    QueryPerformanceCounter(&li);
+    return double(li.QuadPart - CounterStart) / PCFreq;
 }
 
 

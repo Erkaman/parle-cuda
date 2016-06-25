@@ -29,17 +29,17 @@ int* d_compactedBackwardMask;
 
 const int NUM_TESTS = 11;
 const int Tests[NUM_TESTS] = {
-    10000,
-    50000,
-    100000,
-    200000,
-    500000,
-    1000000,
-    2000000,
-    5000000,
-    10000000,
-    20000000,
-    40000000,
+    10000, // 10K
+    50000, // 50K
+    100000, // 100K
+    200000, // 200K
+    500000, // 500K
+    1000000, // 1M
+    2000000, // 2M
+    5000000, // 5M
+    10000000, // 10M
+    20000000, // 20M
+    40000000, // 40M
 };
 
 const int PROFILING_TESTS = 100;
@@ -221,7 +221,7 @@ void profileCpu(F rle, G dataGen) {
         for (int i = 0; i < PROFILING_TESTS; ++i) {
             rle(in, n, g_symbolsOut, g_countsOut);
         }
-        printf("For n = %d, in time %.5f\n", n, (GetCounter() / ((float)PROFILING_TESTS)) / 1000.0f);
+        printf("For n = %d, in time %.5f microseconds\n", n, (GetCounter() / ((float)PROFILING_TESTS)) * 1000.0f);
 
         // also unit test, to make sure that the compression is valid.
         unitTest(in, n, rle, false);
@@ -257,7 +257,10 @@ void profileGpu(F rle, G dataGen) {
 
         float ms;
         cudaEventElapsedTime(&ms, start, stop);
-        printf("For n = %d, in time %.5f\n", n, (ms / ((float)PROFILING_TESTS)) / 1000.0f);
+
+
+
+        printf("For n = %d, in time %.5f microseconds\n", n, (ms / ((float)PROFILING_TESTS)) *1000.0f);
     }
 }
 
@@ -319,8 +322,12 @@ int main(){
 
     // We run this code to profile the performance. 
 
-    printf("profile CPU\n");
+    printf("profile random CPU\n");
     profileCpu(rleCpu, generateRandomData);
+
+    printf("profile compressible CPU\n");
+    profileCpu(rleCpu, generateCompressibleRandomData);
+
 
     printf("profile random GPU\n");
     profileGpu(parleHost, generateRandomData);
