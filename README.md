@@ -1,3 +1,3 @@
-Trying to implement [Parallel Run-Length Encoding(PARLE)](http://tesla.rcub.bg.ac.rs/~taucet/docs/papers/HIPEAC-ShortPaper-AnaBalevic.pdf) in raw CUDA. 
+An implementation of [Parallel Run-Length Encoding(PARLE)](http://tesla.rcub.bg.ac.rs/~taucet/docs/papers/HIPEAC-ShortPaper-AnaBalevic.pdf) in CUDA
 
-But it's not done yet!
+You can read the [details on my blog](https://erkaman.github.io/posts/cuda_rle.html). You can also find benchmarking results there.
