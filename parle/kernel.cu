@@ -302,12 +302,6 @@ int main(){
     CUDA_CHECK(cudaMalloc((void**)&d_symbolsOut, MAX_N * sizeof(int)));
     CUDA_CHECK(cudaMalloc((void**)&d_totalRuns, sizeof(int)));
 
-    /*
-    StartCounter();
-    Sleep(1000);
-    printf("out: %f\n", GetCounter()/1000);
-    */
-
     // allocate resources on the host. 
     g_in = new int[MAX_N];
     g_decompressed = new int[MAX_N];
